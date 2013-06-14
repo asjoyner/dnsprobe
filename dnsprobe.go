@@ -6,6 +6,7 @@ import (
   "log"
   "os"
   "path"
+  "sync"
   "time"
   "github.com/tonnerre/godns"
 )
@@ -39,7 +40,7 @@ func recordquery(dns_client *dns.Client, host string, f *os.File) {
 
 
 // open the output file, loop forever polling the slave
-func pollslave(host string, output_dir string) {
+func pollslave(host string, output_dir string, wg sync.WaitGroup) {
   filename := path.Join(output_dir, fmt.Sprintf("%v.data", host))
   f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
   if err != nil {
@@ -48,14 +49,14 @@ func pollslave(host string, output_dir string) {
   defer f.Close()
 
   dns_client := &dns.Client{}
-  // TODO: Set the read timeout to 30 before entering production
-  dns_client.ReadTimeout = 3 * time.Second
+  dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
   for {
-    // TODO: Schedule the wakeup before calling recordquery, so we poll on
-    // consistent intervals intead of query-timeout + sleep interval
+    // Schedule the wakeup before sending the query, so RTT doesn't cause skew
+    sleepy_channel := time.After(5 * time.Second) // TODO: 300 seconds
     recordquery(dns_client, host, f)
-    <-time.After(5 * time.Second)
+    <-sleepy_channel
   }
+  wg.Done()
 }
 
 
@@ -63,6 +64,7 @@ func main() {
   // Allocate those globals
   dns_query = &dns.Msg{}
   dns_query.SetQuestion("www.joyner.ws.", dns.TypeA)
+  var wg sync.WaitGroup
 
   config_filehandle, err := os.Open("dnsprobe.cfg")
   if err != nil {
@@ -71,14 +73,11 @@ func main() {
 
   bufScanner := bufio.NewScanner(config_filehandle)
   for bufScanner.Scan() {
-    go pollslave(bufScanner.Text(), "data")
+    wg.Add(1)
+    go pollslave(bufScanner.Text(), "data", wg)
   }
 
-  for {
-    // TODO: Do something moar interesting...
-    <-time.After(300 * time.Second)
-  }
-
+  wg.Wait()
   /*
   t := time.Now()
   resp1 := query("128.0.0.1:53")
