@@ -28,9 +28,9 @@ func recordquery(dns_client *dns.Client, host string, f *os.File) {
   t := time.Now()
   // TODO: get the return value, sanity check it
   query(dns_client, host)
-  query_time := uint64(time.Since(t) / time.Microsecond)
+  query_time := float64(time.Since(t) / time.Microsecond)
 
-  text := fmt.Sprintf("%d %d\n", t.Unix(), query_time)
+  text := fmt.Sprintf("%d %.3f\n", t.Unix(), query_time / 1000)
 
   if _, err := f.WriteString(text); err != nil {
     panic(err)
@@ -48,11 +48,12 @@ func pollslave(host string, output_dir string) {
   defer f.Close()
 
   dns_client := &dns.Client{}
+  // TODO: Set the read timeout to 30 before entering production
+  dns_client.ReadTimeout = 3 * time.Second
   for {
+    // TODO: Schedule the wakeup before calling recordquery, so we poll on
+    // consistent intervals intead of query-timeout + sleep interval
     recordquery(dns_client, host, f)
-    // TODO: implement a switch here that handles HUP... 
-    //       ... or a go-routine-happy equivalent ...
-    //       ... maybe functionize the opening and call it again ...
     <-time.After(5 * time.Second)
   }
 }
