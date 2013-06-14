@@ -3,7 +3,6 @@ package main
 import (
   "bufio"
   "fmt"
-  "io/ioutil"
   "log"
   "os"
   "path"
@@ -34,17 +33,17 @@ func recordquery(dns_client *dns.Client, host string, f *os.File) {
   text := fmt.Sprintf("%d %d\n", t.Unix(), query_time)
 
   if _, err := f.WriteString(text); err != nil {
-        panic(err)
+    panic(err)
   }
 }
 
 
 // open the output file, loop forever polling the slave
 func pollslave(host string, output_dir string) {
-  filename := path.Join(output_dir, "data", fmt.Sprintf("%v.data", host))
+  filename := path.Join(output_dir, fmt.Sprintf("%v.data", host))
   f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
   if err != nil {
-        log.Fatal(err)
+    log.Fatal("Could not write to the output file:", err)
   }
   defer f.Close()
 
@@ -64,12 +63,12 @@ func main() {
   dns_query = &dns.Msg{}
   dns_query.SetQuestion("www.joyner.ws.", dns.TypeA)
 
-  config, err := ioutil.ReadFile("dnsprobe.cfg")
+  config_filehandle, err := os.Open("dnsprobe.cfg")
   if err != nil {
-    fmt.Fprintf(os.Stderr, "Could not open config file: %s\n", err)
-    return
+    log.Fatal("error opening the config file: ", err)
   }
-  bufScanner := bufio.NewScanner(config)
+
+  bufScanner := bufio.NewScanner(config_filehandle)
   for bufScanner.Scan() {
     go pollslave(bufScanner.Text(), "data")
   }

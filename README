@@ -1,0 +1,6 @@
+Building this binary depends on additional code, available at
+github.com/tonnerre/godns/.  To install it:
+1) Set a reasonable GOPATH, eg. $ export GOPATH=${HOME}/gocode
+2) make sure $GOPATH exists:    $ mkdir $GOPATH
+3) fetch the code:              $ go get github.com/tonnerre/godns
+
