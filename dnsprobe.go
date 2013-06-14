@@ -1,12 +1,14 @@
 package main
 
 import (
-    "fmt"
-    "log"
-    "os"
-    "path"
-    "time"
-    "github.com/tonnerre/godns"
+  "bufio"
+  "fmt"
+  "io/ioutil"
+  "log"
+  "os"
+  "path"
+  "time"
+  "github.com/tonnerre/godns"
 )
 
 // Define some globals that will get used over and over
@@ -45,10 +47,13 @@ func pollslave(host string, output_dir string) {
         log.Fatal(err)
   }
   defer f.Close()
-  
+
   dns_client := &dns.Client{}
   for {
     recordquery(dns_client, host, f)
+    // TODO: implement a switch here that handles HUP... 
+    //       ... or a go-routine-happy equivalent ...
+    //       ... maybe functionize the opening and call it again ...
     <-time.After(5 * time.Second)
   }
 }
@@ -59,8 +64,20 @@ func main() {
   dns_query = &dns.Msg{}
   dns_query.SetQuestion("www.joyner.ws.", dns.TypeA)
 
-  go pollslave("127.0.0.1:53", ".")
-  pollslave("10.0.5.1:53", ".")
+  config, err := ioutil.ReadFile("dnsprobe.cfg")
+  if err != nil {
+    fmt.Fprintf(os.Stderr, "Could not open config file: %s\n", err)
+    return
+  }
+  bufScanner := bufio.NewScanner(config)
+  for bufScanner.Scan() {
+    go pollslave(bufScanner.Text(), "data")
+  }
+
+  for {
+    // TODO: Do something moar interesting...
+    <-time.After(300 * time.Second)
+  }
 
   /*
   t := time.Now()
