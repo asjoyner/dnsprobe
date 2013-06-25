@@ -8,6 +8,7 @@ import (
   "path"
   "sync"
   "time"
+  "reflect"
   "github.com/tonnerre/godns"
 )
 
@@ -17,14 +18,14 @@ type DnsServer struct {
   dns_client dns.Client
   dns_query *dns.Msg
   master_response *[]dns.RR
-  wait_group sync.WaitGroup
+  wait_group *sync.WaitGroup
 }
 
 
 func query(dns_client dns.Client, host string, dns_query *dns.Msg) []dns.RR {
   resp, err := dns_client.Exchange(dns_query, host)
   if err != nil {
-    fmt.Println(err)
+    log.Printf("Error reading from %s: %s", host, err)
     return nil
   }
   return resp.Answer
@@ -34,14 +35,19 @@ func query(dns_client dns.Client, host string, dns_query *dns.Msg) []dns.RR {
 // query once and write the output to the provided file handle
 func (dns_server *DnsServer) recordquery() {
   t := time.Now()
-  // TODO: get the return value, compare with master_response
+  var equal int
   // TODO: check_current_correct()
   // TODO: if changed and configured: check_convergence()
-  query(dns_server.dns_client, dns_server.ipaddr, dns_server.dns_query)
+  resp := query(dns_server.dns_client, dns_server.ipaddr, dns_server.dns_query)
+  if reflect.DeepEqual(*dns_server.master_response, resp) {
+    equal = 1
+  } else {
+    //log.Printf("Response is different from %s: %+v vs %+v", dns_server.ipaddr,
+    //           *dns_server.master_response, resp)
+  }
   query_time := float64(time.Since(t) / time.Microsecond)
 
-  text := fmt.Sprintf("%d %.3f\n", t.Unix(), query_time / 1000)
-
+  text := fmt.Sprintf("%d %.3f %d\n", t.Unix(), query_time / 1000, equal)
   if _, err := dns_server.file.WriteString(text); err != nil {
     panic(err)
   }
@@ -73,6 +79,7 @@ func (dns_server *DnsServer) pollslave() {
 
 
 func (dns_server *DnsServer) pollmaster() {
+  var once sync.Once
   dns_client := &dns.Client{}
   dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
   dns_server.dns_client = *dns_client
@@ -82,7 +89,13 @@ func (dns_server *DnsServer) pollmaster() {
     resp := query(dns_server.dns_client, dns_server.ipaddr,
                   dns_server.dns_query)
     if resp != nil {
-      dns_server.master_response = &resp
+      if !reflect.DeepEqual(*dns_server.master_response, resp) {
+        log.Printf("Received updated master response: %s", resp)
+        copy(*dns_server.master_response, resp)
+      }
+      // Notify the main thread that we've made a successful first poll
+      // TODO: is that crazy?
+      once.Do(dns_server.wait_group.Done)
     }
     <-sleepy_channel
   }
@@ -91,9 +104,8 @@ func (dns_server *DnsServer) pollmaster() {
 
 
 func main() {
-  // Allocate those globals
   dns_query := dns.Msg{}
-  dns_query.SetQuestion("www.joyner.ws.", dns.TypeANY)
+  dns_query.SetQuestion("www.joyner.ws.", dns.TypeA)
   var wait_group sync.WaitGroup
 
   config_filehandle, err := os.Open("dnsprobe.cfg")
@@ -101,24 +113,27 @@ func main() {
     log.Fatal("error opening the config file: ", err)
   }
 
-  var master_response *[]dns.RR
+  master_response := make([]dns.RR, 1)
+
   // Poll the master to keep track of it's state
   // TODO: Runtime panic if ipaddr has no semicolon.  Check for that.
-  master := DnsServer{ipaddr: "4.3.2.1:53",
-                      master_response: master_response,
+  // TODO: Accept the master address via a flag or config, with a default
+  master := DnsServer{ipaddr: "68.115.138.202:53",
+                      master_response: &master_response,
                       dns_query: &dns_query,
-                      wait_group: wait_group}
+                      wait_group: &wait_group}
 
   wait_group.Add(1)
   go master.pollmaster()
+  wait_group.Wait()  // wait until the master has gotten a valid response
 
   bufScanner := bufio.NewScanner(config_filehandle)
   for bufScanner.Scan() {
     dns_server := DnsServer{ipaddr: bufScanner.Text(),
                             output_dir: "data",
-                            master_response: master_response,
+                            master_response: &master_response,
                             dns_query: &dns_query,
-                            wait_group: wait_group}
+                            wait_group: &wait_group}
 
     wait_group.Add(1)
     go dns_server.pollslave()
