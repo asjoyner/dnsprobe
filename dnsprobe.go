@@ -6,6 +6,7 @@ import (
   "log"
   "os"
   "path"
+  "strings"
   "sync"
   "time"
   "reflect"
@@ -104,7 +105,7 @@ func (dns_server *DnsServer) pollmaster() {
 
 func main() {
   dns_query := dns.Msg{}
-  dns_query.SetQuestion("www.joyner.ws.", dns.TypeA)
+  dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
   var wait_group sync.WaitGroup
 
   config_filehandle, err := os.Open("dnsprobe.cfg")
@@ -113,6 +114,8 @@ func main() {
   }
 
   master_response := make([]dns.RR, 1)
+
+  // TODO: Process the config before making the first query to the master?
 
   // Poll the master to keep track of it's state
   // TODO: Runtime panic if ipaddr has no semicolon.  Check for that.
@@ -128,7 +131,11 @@ func main() {
 
   bufScanner := bufio.NewScanner(config_filehandle)
   for bufScanner.Scan() {
-    dns_server := DnsServer{ipaddr: bufScanner.Text(),
+    ipaddr_with_port := bufScanner.Text()
+    if ! strings.Contains(ipaddr_with_port, ":") {
+      log.Fatal("Config line does not contain a colon: ", ipaddr_with_port)
+    }
+    dns_server := DnsServer{ipaddr: ipaddr_with_port,
                             output_dir: "data",
                             master_response: &master_response,
                             dns_query: &dns_query,
