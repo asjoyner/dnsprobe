@@ -36,8 +36,7 @@ func query(dns_client dns.Client, host string, dns_query *dns.Msg) []dns.RR {
 func (dns_server *DnsServer) recordquery() {
   t := time.Now()
   var equal int
-  // TODO: check_current_correct()
-  // TODO: if changed and configured: check_convergence()
+  // TODO: check_latency()
   resp := query(dns_server.dns_client, dns_server.ipaddr, dns_server.dns_query)
   if reflect.DeepEqual(*dns_server.master_response, resp) {
     equal = 1
