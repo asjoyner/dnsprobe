@@ -150,30 +150,4 @@ func main() {
 
   // TODO: a switch here that will also await signals and handle them?
   wait_group.Wait()
-  /*
-  t := time.Now()
-  resp1 := query("128.0.0.1:53")
-  resp2 := query("127.0.0.1:53")
-  // TODO: Find or write a good way to compare these
-  if resp1 == nil || resp2 == nil {
-    fmt.Println("Boo!")
-  } else if len(resp1) == len(resp2) {
-    fmt.Println("Hooray!")
-  } else {
-    fmt.Println("Boo!")
-  }
-  
-  //
-  resp, err := c.Exchange(m, "127.0.0.1:53")
-  if err != nil {
-    fmt.Println("Whoops...")
-  } else {
-    for _, rr := range resp.Answer {  // iterate the returned records
-      fmt.Println(rr.Header().Name)
-    }
-  }
-  */
-  //fmt.Println("Happy Day")
-  //time.Sleep(300 * time.Millisecond)
-  //fmt.Println(time.Since(t))
 }
