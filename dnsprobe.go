@@ -22,13 +22,14 @@ type DnsServer struct {
   wait_group *sync.WaitGroup
 }
 
-
+// TODO: use ExchangeRTT's rtt time rather than calculating my own
 func query(dns_client dns.Client, host string, dns_query *dns.Msg) []dns.RR {
   resp, err := dns_client.Exchange(dns_query, host)
   if err != nil {
     log.Printf("Error reading from %s: %s", host, err)
     return nil
   }
+  //log.Printf(host, resp.Answer)
   return resp.Answer
 }
 
@@ -40,6 +41,8 @@ func (dns_server *DnsServer) recordquery() {
   // TODO: check_latency()
   resp := query(dns_server.dns_client, dns_server.ipaddr, dns_server.dns_query)
   if reflect.DeepEqual(*dns_server.master_response, resp) {
+    //log.Printf("Response is the same from %s: %+v vs %+v", dns_server.ipaddr,
+    //           *dns_server.master_response, resp)
     equal = 1
   } else {
     //log.Printf("Response is different from %s: %+v vs %+v", dns_server.ipaddr,
@@ -91,6 +94,7 @@ func (dns_server *DnsServer) pollmaster() {
     if resp != nil {
       if !reflect.DeepEqual(*dns_server.master_response, resp) {
         log.Printf("Received updated master response: %s", resp)
+        // TODO: Do this w/o the copy, which is racy and ugly.
         copy(*dns_server.master_response, resp)
       }
       // Notify the main thread that we've made a successful first poll
@@ -118,7 +122,6 @@ func main() {
   // TODO: Process the config before making the first query to the master?
 
   // Poll the master to keep track of it's state
-  // TODO: Runtime panic if ipaddr has no semicolon.  Check for that.
   // TODO: Accept the master address via a flag or config, with a default
   master := DnsServer{ipaddr: "68.115.138.202:53",
                       master_response: &master_response,
