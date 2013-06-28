@@ -22,88 +22,85 @@ type DnsServer struct {
   wait_group *sync.WaitGroup
 }
 
-// TODO: use ExchangeRTT's rtt time rather than calculating my own
-func query(dns_client dns.Client, host string, dns_query *dns.Msg) []dns.RR {
-  resp, err := dns_client.Exchange(dns_query, host)
-  if err != nil {
-    log.Printf("Error reading from %s: %s", host, err)
-    return nil
+// TODO: Need a custom comparator which ignores the TTL which should differ
+/*func compare_rr(p1 dns.RR[], p2 dns.RR[]) bool {
+  if t, ok := p1.Answer[0].(*dns.TXT); ok {
   }
-  //log.Printf(host, resp.Answer)
-  return resp.Answer
-}
-
+  return false
+}*/
 
 // query once and write the output to the provided file handle
-func (dns_server *DnsServer) recordquery() {
+func (s *DnsServer) recordquery() {
   t := time.Now()
   var equal int
-  // TODO: check_latency()
-  resp := query(dns_server.dns_client, dns_server.ipaddr, dns_server.dns_query)
-  if reflect.DeepEqual(*dns_server.master_response, resp) {
-    //log.Printf("Response is the same from %s: %+v vs %+v", dns_server.ipaddr,
-    //           *dns_server.master_response, resp)
+  resp, rtt, err := s.dns_client.Exchange(s.dns_query, s.ipaddr)
+  if err != nil {
+    log.Printf("Error reading from %s: %s (%s)", s.ipaddr, err, rtt)
+    // TODO: Write out the 'nan' value
+    return
+  }
+  if reflect.DeepEqual(*s.master_response, resp.Answer) {
+    //log.Printf("Response is the same from %s: %+v vs %+v", s.ipaddr,
+    //           *s.master_response, resp.Answer)
     equal = 1
   } else {
-    //log.Printf("Response is different from %s: %+v vs %+v", dns_server.ipaddr,
-    //           *dns_server.master_response, resp)
+    log.Printf("Response is different from %s: %+v vs %+v", s.ipaddr,
+               *s.master_response, resp.Answer)
   }
-  query_time := float64(time.Since(t) / time.Microsecond)
+  query_time := float64(rtt / time.Microsecond)
+
+  // TODO: get_ttl(resp.Answer)
 
   text := fmt.Sprintf("%d %.3f %d\n", t.Unix(), query_time / 1000, equal)
-  if _, err := dns_server.file.WriteString(text); err != nil {
-    panic(err)
+  if _, err := s.file.WriteString(text); err != nil {
+    panic(err)  // TODO: Don't panic here, just log an error
   }
 }
 
 
 // open the output file, loop forever polling the slave
-func (dns_server *DnsServer) pollslave() {
-  filename := path.Join(dns_server.output_dir,
-                        fmt.Sprintf("%v.data", dns_server.ipaddr))
+func (s *DnsServer) pollslave() {
+  filename := path.Join(s.output_dir, fmt.Sprintf("%v.data", s.ipaddr))
   f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
   if err != nil {
     log.Fatal("Could not write to the output file:", err)
   }
   defer f.Close()
-  dns_server.file = f
+  s.file = f
 
   dns_client := &dns.Client{}
   dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
-  dns_server.dns_client = *dns_client
+  s.dns_client = *dns_client
   for {
     // Schedule the wakeup before sending the query, so RTT doesn't cause skew
     sleepy_channel := time.After(5 * time.Second) // TODO: 300 seconds
-    dns_server.recordquery()
+    s.recordquery()
     <-sleepy_channel
   }
-  dns_server.wait_group.Done()
+  s.wait_group.Done()
 }
 
 
-func (dns_server *DnsServer) pollmaster() {
+func (s *DnsServer) pollmaster() {
   var once sync.Once
   dns_client := &dns.Client{}
   dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
-  dns_server.dns_client = *dns_client
+  s.dns_client = *dns_client
   for {
     // Schedule the wakeup before sending the query, so RTT doesn't cause skew
     sleepy_channel := time.After(5 * time.Second) // TODO: 300 seconds
-    resp := query(dns_server.dns_client, dns_server.ipaddr,
-                  dns_server.dns_query)
+    resp, _, _ := s.dns_client.Exchange(s.dns_query, s.ipaddr)
     if resp != nil {
-      if !reflect.DeepEqual(*dns_server.master_response, resp) {
-        log.Printf("Received updated master response: %s", resp)
+      if !reflect.DeepEqual(*s.master_response, resp.Answer) {
+        log.Printf("Received updated master response: %s", resp.Answer)
         // TODO: Do this w/o the copy, which is racy and ugly.
-        copy(*dns_server.master_response, resp)
+        copy(*s.master_response, resp.Answer)
       }
       // Notify the main thread that we've made a successful first poll
-      // TODO: is that crazy?
-      once.Do(dns_server.wait_group.Done)
+      once.Do(s.wait_group.Done)
     }
     <-sleepy_channel
   }
-  dns_server.wait_group.Done()
 }
 
 
