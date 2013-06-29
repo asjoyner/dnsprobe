@@ -6,10 +6,10 @@ import (
   "log"
   "os"
   "path"
+  "strconv"
   "strings"
   "sync"
   "time"
-  "reflect"
   "github.com/tonnerre/godns"
 )
 
@@ -18,16 +18,9 @@ type DnsServer struct {
   file *os.File
   dns_client dns.Client
   dns_query *dns.Msg
-  master_response *[]dns.RR
+  master_response *int
   wait_group *sync.WaitGroup
 }
-
-// TODO: Need a custom comparator which ignores the TTL which should differ
-/*func compare_rr(p1 dns.RR[], p2 dns.RR[]) bool {
-  if t, ok := p1.Answer[0].(*dns.TXT); ok {
-  }
-  return false
-}*/
 
 // query once and write the output to the provided file handle
 func (s *DnsServer) recordquery() {
@@ -39,17 +32,32 @@ func (s *DnsServer) recordquery() {
     // TODO: Write out the 'nan' value
     return
   }
-  if reflect.DeepEqual(*s.master_response, resp.Answer) {
-    //log.Printf("Response is the same from %s: %+v vs %+v", s.ipaddr,
-    //           *s.master_response, resp.Answer)
+
+  // Slave returned empty respose
+  if resp == nil || len(resp.Answer) == 0 {
+    log.Printf("slave returned empty response %s", s.ipaddr)
+    // TODO: Write out a 'nan' value
+    return
+  }
+
+  // Parse the slave's response
+  // TODO(jonallie): query about the .(*dns.TXT) syntax
+  slave_response, err := strconv.Atoi(resp.Answer[0].(*dns.TXT).Txt[0])
+  if err != nil {
+    log.Printf("Bad data from slave: %s", s.ipaddr, err)
+    // TODO: Write out the 'nan' value
+    return
+  }
+
+  if *s.master_response <= slave_response {
+    log.Printf("Response is the same from %s: %+v vs %+v", s.ipaddr,
+               *s.master_response, slave_response)
     equal = 1
   } else {
     log.Printf("Response is different from %s: %+v vs %+v", s.ipaddr,
-               *s.master_response, resp.Answer)
+               *s.master_response, slave_response)
   }
   query_time := float64(rtt / time.Microsecond)
-
-  // TODO: get_ttl(resp.Answer)
 
   text := fmt.Sprintf("%d %.3f %d\n", t.Unix(), query_time / 1000, equal)
   if _, err := s.file.WriteString(text); err != nil {
@@ -86,20 +94,33 @@ func (s *DnsServer) pollmaster() {
   dns_client := &dns.Client{}
   dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
   s.dns_client = *dns_client
+  ticker := time.NewTicker(5 * time.Second) // TODO: 300 seconds
   for {
-    // Schedule the wakeup before sending the query, so RTT doesn't cause skew
-    sleepy_channel := time.After(5 * time.Second) // TODO: 300 seconds
-    resp, _, _ := s.dns_client.Exchange(s.dns_query, s.ipaddr)
-    if resp != nil {
-      if !reflect.DeepEqual(*s.master_response, resp.Answer) {
-        log.Printf("Received updated master response: %s", resp.Answer)
-        // TODO: Do this w/o the copy, which is racy and ugly.
-        copy(*s.master_response, resp.Answer)
-      }
-      // Notify the main thread that we've made a successful first poll
-      once.Do(s.wait_group.Done)
+    // Send the query to the master
+    resp, _, err := s.dns_client.Exchange(s.dns_query, s.ipaddr)
+    if resp == nil {
+      log.Printf("master returned empty response %s: %d", s.ipaddr, err)
+      <-ticker.C
+      continue
     }
-    <-sleepy_channel
+
+    // Parse the master's response
+    master_response, err := strconv.Atoi(resp.Answer[0].(*dns.TXT).Txt[0])
+    if err != nil {
+      log.Printf("Bad data from master %s: %s (%s)", s.ipaddr, err,
+                 resp.Answer[0].(*dns.TXT).Txt[0])
+      <-ticker.C
+      continue
+    }
+
+    // Notify the main thread that we've made a successful first poll
+    if *s.master_response != master_response {
+      log.Printf("New data from master %s: %d vs %d", s.ipaddr,
+                 *s.master_response, master_response)
+    }
+    s.master_response = &master_response
+    once.Do(s.wait_group.Done)
+    <-ticker.C
   }
 }
 
@@ -108,13 +129,12 @@ func main() {
   dns_query := dns.Msg{}
   dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
   var wait_group sync.WaitGroup
+  var master_response int
 
   config_filehandle, err := os.Open("dnsprobe.cfg")
   if err != nil {
     log.Fatal("error opening the config file: ", err)
   }
-
-  master_response := make([]dns.RR, 1)
 
   // TODO: Process the config before making the first query to the master?
 
