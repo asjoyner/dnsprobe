@@ -41,7 +41,6 @@ func (s *DnsServer) recordquery() {
   }
 
   // Parse the slave's response
-  // TODO(jonallie): query about the .(*dns.TXT) syntax
   slave_response, err := strconv.Atoi(resp.Answer[0].(*dns.TXT).Txt[0])
   if err != nil {
     log.Printf("Bad data from slave: %s", s.ipaddr, err)
@@ -79,11 +78,10 @@ func (s *DnsServer) pollslave() {
   dns_client := &dns.Client{}
   dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
   s.dns_client = *dns_client
+  ticker := time.NewTicker(5 * time.Second) // TODO: 300 seconds
   for {
-    // Schedule the wakeup before sending the query, so RTT doesn't cause skew
-    sleepy_channel := time.After(5 * time.Second) // TODO: 300 seconds
     s.recordquery()
-    <-sleepy_channel
+    <-ticker.C
   }
   s.wait_group.Done()
 }
@@ -96,11 +94,11 @@ func (s *DnsServer) pollmaster() {
   s.dns_client = *dns_client
   ticker := time.NewTicker(5 * time.Second) // TODO: 300 seconds
   for {
+    <-ticker.C  // Don't send a flood of queries in a restart loop...
     // Send the query to the master
     resp, _, err := s.dns_client.Exchange(s.dns_query, s.ipaddr)
     if resp == nil {
       log.Printf("master returned empty response %s: %d", s.ipaddr, err)
-      <-ticker.C
       continue
     }
 
@@ -109,7 +107,6 @@ func (s *DnsServer) pollmaster() {
     if err != nil {
       log.Printf("Bad data from master %s: %s (%s)", s.ipaddr, err,
                  resp.Answer[0].(*dns.TXT).Txt[0])
-      <-ticker.C
       continue
     }
 
@@ -120,7 +117,6 @@ func (s *DnsServer) pollmaster() {
     }
     s.master_response = &master_response
     once.Do(s.wait_group.Done)
-    <-ticker.C
   }
 }
 
