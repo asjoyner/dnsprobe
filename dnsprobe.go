@@ -13,61 +13,58 @@ import (
   "github.com/tonnerre/godns"
 )
 
+var MASTER_POLL_INTERVAL = 1 * time.Second
+
 type DnsServer struct {
-  ipaddr, output_dir string
+  hostport, output_dir string
   file *os.File
   dns_client dns.Client
   dns_query *dns.Msg
-  master_response *int
+  responses chan Response
   wait_group *sync.WaitGroup
+}
+
+type Response struct {
+  hostport string
+  txtrecord, queried_at int64
+  query_ms float64
 }
 
 // query once and write the output to the provided file handle
 func (s *DnsServer) recordquery() {
   t := time.Now()
-  var equal int
-  resp, rtt, err := s.dns_client.Exchange(s.dns_query, s.ipaddr)
+  resp, rtt, err := s.dns_client.Exchange(s.dns_query, s.hostport)
   if err != nil {
-    log.Printf("Error reading from %s: %s (%s)", s.ipaddr, err, rtt)
+    log.Printf("Error reading from %s: %s (%s)", s.hostport, err, rtt)
     // TODO: Write out the 'nan' value
     return
   }
 
   // Slave returned empty respose
   if resp == nil || len(resp.Answer) == 0 {
-    log.Printf("slave returned empty response %s", s.ipaddr)
-    // TODO: Write out a 'nan' value
+    log.Printf("slave returned empty response %s", s.hostport)
     return
   }
 
-  // Parse the slave's response
-  slave_response, err := strconv.Atoi(resp.Answer[0].(*dns.TXT).Txt[0])
+  // Parse the slave's response into an int64
+  slave_response := resp.Answer[0].(*dns.TXT).Txt[0]
+  txtrecord, err := strconv.ParseInt(slave_response, 10, 0)
   if err != nil {
-    log.Printf("Bad data from slave: %s", s.ipaddr, err)
+    log.Printf("Bad data from slave: %s", s.hostport, err)
     // TODO: Write out the 'nan' value
     return
   }
 
-  if *s.master_response <= slave_response {
-    log.Printf("Response is the same from %s: %+v vs %+v", s.ipaddr,
-               *s.master_response, slave_response)
-    equal = 1
-  } else {
-    log.Printf("Response is different from %s: %+v vs %+v", s.ipaddr,
-               *s.master_response, slave_response)
-  }
-  query_time := float64(rtt / time.Microsecond)
+  query_ms := float64(rtt) / 1000000
+  query_ms = float64(time.Since(t)) / 1000000
+  s.responses <- Response{s.hostport, txtrecord, t.Unix(), query_ms}
 
-  text := fmt.Sprintf("%d %.3f %d\n", t.Unix(), query_time / 1000, equal)
-  if _, err := s.file.WriteString(text); err != nil {
-    panic(err)  // TODO: Don't panic here, just log an error
-  }
 }
 
 
 // open the output file, loop forever polling the slave
 func (s *DnsServer) pollslave() {
-  filename := path.Join(s.output_dir, fmt.Sprintf("%v.data", s.ipaddr))
+  filename := path.Join(s.output_dir, fmt.Sprintf("%v.data", s.hostport))
   f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
   if err != nil {
     log.Fatal("Could not write to the output file:", err)
@@ -92,52 +89,106 @@ func (s *DnsServer) pollmaster() {
   dns_client := &dns.Client{}
   dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
   s.dns_client = *dns_client
-  ticker := time.NewTicker(5 * time.Second) // TODO: 300 seconds
+  ticker := time.NewTicker(MASTER_POLL_INTERVAL) // TODO: 300 seconds
   for {
     <-ticker.C  // Don't send a flood of queries in a restart loop...
     // Send the query to the master
-    resp, _, err := s.dns_client.Exchange(s.dns_query, s.ipaddr)
+    t := time.Now()
+    resp, rtt, err := s.dns_client.Exchange(s.dns_query, s.hostport)
     if resp == nil {
-      log.Printf("master returned empty response %s: %d", s.ipaddr, err)
+      log.Printf("master returned empty response %s: %d", s.hostport, err)
       continue
     }
 
-    // Parse the master's response
-    master_response, err := strconv.Atoi(resp.Answer[0].(*dns.TXT).Txt[0])
+    // Parse the master's response into an int64
+    master_response := resp.Answer[0].(*dns.TXT).Txt[0]
+    txtrecord, err := strconv.ParseInt(master_response, 10, 0)
     if err != nil {
-      log.Printf("Bad data from master %s: %s (%s)", s.ipaddr, err,
+      log.Printf("Bad data from master %s: %s (%s)", s.hostport, err,
                  resp.Answer[0].(*dns.TXT).Txt[0])
       continue
     }
 
+    // Update the compare_responses() routine
+    query_ms := float64(rtt) / 100000
+    s.responses <- Response{s.hostport, txtrecord, t.Unix(), query_ms}
+
     // Notify the main thread that we've made a successful first poll
-    if *s.master_response != master_response {
-      log.Printf("New data from master %s: %d vs %d", s.ipaddr,
-                 *s.master_response, master_response)
-    }
-    s.master_response = &master_response
     once.Do(s.wait_group.Done)
   }
 }
 
+// TODO: why can't I combine the declaration of the responses?
+func compare_responses(output_dir string, master_responses chan Response,
+                       slave_responses chan Response) {
+  files := make(map[string]*os.File)
+  filemode := os.O_CREATE|os.O_APPEND|os.O_WRONLY
+  var master_value, master_queried_at int64
+
+  for {
+    select {
+    case r := <-master_responses:
+      master_value = r.txtrecord
+      master_queried_at = r.queried_at
+    case r := <-slave_responses:
+      // Make sure we have a FH open for this slave
+      if _, ok := files[r.hostport]; !ok {
+        filename := path.Join(output_dir, fmt.Sprintf("%v.data", r.hostport))
+        f, err := os.OpenFile(filename, filemode, 0600)
+        if err != nil {
+          log.Fatal("Could not write to the output file:", err)
+        }
+        defer f.Close()
+        files[r.hostport] = f  // store it for later use
+      }
+
+      // Drop polls from the slaves if the master data goes stale
+      if r.queried_at > (master_queried_at + int64(MASTER_POLL_INTERVAL)*5) {
+        log.Println("Master data too stale for this poll: %s @ %d", r.hostport,
+                    r.queried_at, master_queried_at)
+      }
+      if r.queried_at < (master_queried_at - int64(MASTER_POLL_INTERVAL)*5) {
+        log.Println("Slave data too old for this poll: ", r.hostport,
+                    r.queried_at, master_queried_at)
+      }
+
+      // if available, compare it's response with the master, and log it
+      latency := "nan"
+      if r.txtrecord != 0 {
+        latency = fmt.Sprintf("%d", master_value - r.txtrecord)
+      }
+      text := fmt.Sprintf("%d %.3f %s\n", r.queried_at, r.query_ms, latency)
+      log.Printf("%-25s %s", r.hostport, text)
+      if _, err := files[r.hostport].WriteString(text); err != nil {
+        panic(err)  // TODO: Don't panic here, just log an error
+      }
+    }
+  }
+
+}
 
 func main() {
   dns_query := dns.Msg{}
   dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
   var wait_group sync.WaitGroup
-  var master_response int
+  var output_dir = "data"
 
   config_filehandle, err := os.Open("dnsprobe.cfg")
   if err != nil {
     log.Fatal("error opening the config file: ", err)
   }
 
+
   // TODO: Process the config before making the first query to the master?
+
+  // Setup some channels for the master and slaves to coordinate later
+  master_responses := make(chan Response, 3)
+  slave_responses := make(chan Response, 100)
 
   // Poll the master to keep track of it's state
   // TODO: Accept the master address via a flag or config, with a default
-  master := DnsServer{ipaddr: "68.115.138.202:53",
-                      master_response: &master_response,
+  master := DnsServer{hostport: "68.115.138.202:53",
+                      responses: master_responses,
                       dns_query: &dns_query,
                       wait_group: &wait_group}
 
@@ -147,19 +198,22 @@ func main() {
 
   bufScanner := bufio.NewScanner(config_filehandle)
   for bufScanner.Scan() {
-    ipaddr_with_port := bufScanner.Text()
-    if ! strings.Contains(ipaddr_with_port, ":") {
-      log.Fatal("Config line does not contain a colon: ", ipaddr_with_port)
+    hostport := bufScanner.Text()
+    if ! strings.Contains(hostport, ":") {
+      log.Fatal("Config line does not contain a colon: ", hostport)
     }
-    dns_server := DnsServer{ipaddr: ipaddr_with_port,
-                            output_dir: "data",
-                            master_response: &master_response,
+    dns_server := DnsServer{hostport: hostport,
+                            responses: slave_responses,
                             dns_query: &dns_query,
                             wait_group: &wait_group}
 
     wait_group.Add(1)
     go dns_server.pollslave()
+
   }
+
+  // Collate the responses and record them on disk
+  compare_responses(output_dir, master_responses, slave_responses)
 
   // TODO: a switch here that will also await signals and handle them?
   wait_group.Wait()
