@@ -2,8 +2,10 @@ package main
 
 import (
   "bufio"
+  "expvar"
   "fmt"
   "log"
+  "net/http"
   "os"
   "path"
   "strconv"
@@ -56,22 +58,12 @@ func (s *DnsServer) recordquery() {
   }
 
   query_ms := float64(rtt) / 1000000
-  query_ms = float64(time.Since(t)) / 1000000
   s.responses <- Response{s.hostport, txtrecord, t.Unix(), query_ms}
-
 }
 
 
-// open the output file, loop forever polling the slave
+// loop forever polling the slave
 func (s *DnsServer) pollslave() {
-  filename := path.Join(s.output_dir, fmt.Sprintf("%v.data", s.hostport))
-  f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-  if err != nil {
-    log.Fatal("Could not write to the output file:", err)
-  }
-  defer f.Close()
-  s.file = f
-
   dns_client := &dns.Client{}
   dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
   s.dns_client = *dns_client
@@ -80,12 +72,15 @@ func (s *DnsServer) pollslave() {
     s.recordquery()
     <-ticker.C
   }
-  s.wait_group.Done()
 }
 
 
 func (s *DnsServer) pollmaster() {
   var once sync.Once
+  var queries_sent_varz = expvar.NewInt("master-queries-sent")
+  var queries_avg_varz = expvar.NewFloat("master-queries-avg-ms")
+  var queries_sent int64
+  var queries_avg, cumulative_latency float64
   dns_client := &dns.Client{}
   dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
   s.dns_client = *dns_client
@@ -110,11 +105,16 @@ func (s *DnsServer) pollmaster() {
     }
 
     // Update the compare_responses() routine
-    query_ms := float64(rtt) / 100000
+    query_ms := float64(rtt) / 1000000
     s.responses <- Response{s.hostport, txtrecord, t.Unix(), query_ms}
 
     // Notify the main thread that we've made a successful first poll
     once.Do(s.wait_group.Done)
+    queries_sent++
+    queries_sent_varz.Set(queries_sent)
+    cumulative_latency = cumulative_latency + query_ms
+    queries_avg = cumulative_latency / float64(queries_sent)
+    queries_avg_varz.Set(queries_avg)
   }
 }
 
@@ -146,10 +146,12 @@ func compare_responses(output_dir string, master_responses chan Response,
       if r.queried_at > (master_queried_at + int64(MASTER_POLL_INTERVAL)*5) {
         log.Println("Master data too stale for this poll: %s @ %d", r.hostport,
                     r.queried_at, master_queried_at)
+        continue
       }
       if r.queried_at < (master_queried_at - int64(MASTER_POLL_INTERVAL)*5) {
         log.Println("Slave data too old for this poll: ", r.hostport,
                     r.queried_at, master_queried_at)
+        continue
       }
 
       // if available, compare it's response with the master, and log it
@@ -178,10 +180,9 @@ func main() {
     log.Fatal("error opening the config file: ", err)
   }
 
-
   // TODO: Process the config before making the first query to the master?
 
-  // Setup some channels for the master and slaves to coordinate later
+  // some channels for the master and slaves to coordinate later
   master_responses := make(chan Response, 3)
   slave_responses := make(chan Response, 100)
 
@@ -204,17 +205,16 @@ func main() {
     }
     dns_server := DnsServer{hostport: hostport,
                             responses: slave_responses,
-                            dns_query: &dns_query,
-                            wait_group: &wait_group}
-
-    wait_group.Add(1)
+                            dns_query: &dns_query}
     go dns_server.pollslave()
 
   }
 
   // Collate the responses and record them on disk
-  compare_responses(output_dir, master_responses, slave_responses)
+  go compare_responses(output_dir, master_responses, slave_responses)
 
-  // TODO: a switch here that will also await signals and handle them?
-  wait_group.Wait()
+  // launch the http server
+  // TODO: build minimal web output that displays graphs
+  //http.Handle("/graph", graphHandler)
+  log.Fatal(http.ListenAndServe(":8080", nil))
 }
