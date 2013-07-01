@@ -10,7 +10,6 @@ import (
   "path"
   "strconv"
   "strings"
-  "sync"
   "time"
   "github.com/tonnerre/godns"
 )
@@ -23,7 +22,6 @@ type DnsServer struct {
   dns_client dns.Client
   dns_query *dns.Msg
   responses chan Response
-  wait_group *sync.WaitGroup
 }
 
 type Response struct {
@@ -33,32 +31,34 @@ type Response struct {
 }
 
 // query once and write the output to the provided file handle
-func (s *DnsServer) recordquery() {
+func (s *DnsServer) query() float64 {
   t := time.Now()
   resp, rtt, err := s.dns_client.Exchange(s.dns_query, s.hostport)
   if err != nil {
     log.Printf("Error reading from %s: %s (%s)", s.hostport, err, rtt)
-    // TODO: Write out the 'nan' value
-    return
+    // if we get a straight-up error (typically i/o timeout), skip it
+    return 0
   }
+  query_ms := float64(rtt) / 1000000
 
-  // Slave returned empty respose
+  // We received an empty respose
   if resp == nil || len(resp.Answer) == 0 {
-    log.Printf("slave returned empty response %s", s.hostport)
-    return
+    log.Printf("empty response from %s", s.hostport)
+    s.responses <- Response{s.hostport, 0, t.Unix(), query_ms}
+    return 0
   }
 
-  // Parse the slave's response into an int64
+  // Parse the response into an int64
   slave_response := resp.Answer[0].(*dns.TXT).Txt[0]
   txtrecord, err := strconv.ParseInt(slave_response, 10, 0)
   if err != nil {
-    log.Printf("Bad data from slave: %s", s.hostport, err)
-    // TODO: Write out the 'nan' value
-    return
+    log.Printf("Bad data from %s: %s", s.hostport, err)
+    s.responses <- Response{s.hostport, 0, t.Unix(), query_ms}
+    return query_ms
   }
 
-  query_ms := float64(rtt) / 1000000
   s.responses <- Response{s.hostport, txtrecord, t.Unix(), query_ms}
+  return query_ms
 }
 
 
@@ -69,14 +69,13 @@ func (s *DnsServer) pollslave() {
   s.dns_client = *dns_client
   ticker := time.NewTicker(5 * time.Second) // TODO: 300 seconds
   for {
-    s.recordquery()
+    s.query()
     <-ticker.C
   }
 }
 
 
 func (s *DnsServer) pollmaster() {
-  var once sync.Once
   var queries_sent_varz = expvar.NewInt("master-queries-sent")
   var queries_avg_varz = expvar.NewFloat("master-queries-avg-ms")
   var queries_sent int64
@@ -88,28 +87,9 @@ func (s *DnsServer) pollmaster() {
   for {
     <-ticker.C  // Don't send a flood of queries in a restart loop...
     // Send the query to the master
-    t := time.Now()
-    resp, rtt, err := s.dns_client.Exchange(s.dns_query, s.hostport)
-    if resp == nil {
-      log.Printf("master returned empty response %s: %d", s.hostport, err)
-      continue
-    }
-
-    // Parse the master's response into an int64
-    master_response := resp.Answer[0].(*dns.TXT).Txt[0]
-    txtrecord, err := strconv.ParseInt(master_response, 10, 0)
-    if err != nil {
-      log.Printf("Bad data from master %s: %s (%s)", s.hostport, err,
-                 resp.Answer[0].(*dns.TXT).Txt[0])
-      continue
-    }
-
-    // Update the compare_responses() routine
-    query_ms := float64(rtt) / 1000000
-    s.responses <- Response{s.hostport, txtrecord, t.Unix(), query_ms}
+    query_ms := s.query()
 
     // Notify the main thread that we've made a successful first poll
-    once.Do(s.wait_group.Done)
     queries_sent++
     queries_sent_varz.Set(queries_sent)
     cumulative_latency = cumulative_latency + query_ms
@@ -124,10 +104,17 @@ func compare_responses(output_dir string, master_responses chan Response,
   files := make(map[string]*os.File)
   filemode := os.O_CREATE|os.O_APPEND|os.O_WRONLY
   var master_value, master_queried_at int64
+  var last_master_poll = expvar.NewInt("last-successful-master-poll")
+  var master_skew = int64(MASTER_POLL_INTERVAL)/1000000000 * 5
 
   for {
     select {
     case r := <-master_responses:
+      if r.txtrecord == 0 {
+        continue  // skip bad polls of the master
+      }
+      //log.Printf("Got master response: %d", r.txtrecord)
+      last_master_poll.Set(time.Now().Unix())
       master_value = r.txtrecord
       master_queried_at = r.queried_at
     case r := <-slave_responses:
@@ -143,18 +130,18 @@ func compare_responses(output_dir string, master_responses chan Response,
       }
 
       // Drop polls from the slaves if the master data goes stale
-      if r.queried_at > (master_queried_at + int64(MASTER_POLL_INTERVAL)*5) {
-        log.Println("Master data too stale for this poll: %s @ %d", r.hostport,
+      if r.queried_at > (master_queried_at + master_skew) {
+        log.Printf("Master data too stale for this poll: %s @ %d", r.hostport,
                     r.queried_at, master_queried_at)
         continue
       }
-      if r.queried_at < (master_queried_at - int64(MASTER_POLL_INTERVAL)*5) {
+      if r.queried_at < (master_queried_at - master_skew) {
         log.Println("Slave data too old for this poll: ", r.hostport,
                     r.queried_at, master_queried_at)
         continue
       }
 
-      // if available, compare it's response with the master, and log it
+      // if available, compare the response with the master, and log it
       latency := "nan"
       if r.txtrecord != 0 {
         latency = fmt.Sprintf("%d", master_value - r.txtrecord)
@@ -172,7 +159,6 @@ func compare_responses(output_dir string, master_responses chan Response,
 func main() {
   dns_query := dns.Msg{}
   dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
-  var wait_group sync.WaitGroup
   var output_dir = "data"
 
   config_filehandle, err := os.Open("dnsprobe.cfg")
@@ -190,13 +176,14 @@ func main() {
   // TODO: Accept the master address via a flag or config, with a default
   master := DnsServer{hostport: "68.115.138.202:53",
                       responses: master_responses,
-                      dns_query: &dns_query,
-                      wait_group: &wait_group}
+                      dns_query: &dns_query}
 
-  wait_group.Add(1)
   go master.pollmaster()
-  wait_group.Wait()  // wait until the master has gotten a valid response
+  // wait until the master has gotten a valid response, then re-enqueue it
+  buffer := <-master_responses
+  master_responses <-buffer
 
+  // read in the config, fire up one goroutine per slave to be polled
   bufScanner := bufio.NewScanner(config_filehandle)
   for bufScanner.Scan() {
     hostport := bufScanner.Text()
