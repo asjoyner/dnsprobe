@@ -149,7 +149,7 @@ func compare_responses(output_dir string, master_responses chan Response,
       text := fmt.Sprintf("%d %.3f %s\n", r.queried_at, r.query_ms, latency)
       log.Printf("%-25s %s", r.hostport, text)
       if _, err := files[r.hostport].WriteString(text); err != nil {
-        panic(err)  // TODO: Don't panic here, just log an error
+        log.Printf("Could not write to %s log: %s", r.hostport, err)
       }
     }
   }
@@ -202,6 +202,7 @@ func main() {
 
   // launch the http server
   // TODO: build minimal web output that displays graphs
+  // use Flot?  http://www.flotcharts.org/flot/examples/basic-usage/index.html
   //http.Handle("/graph", graphHandler)
   log.Fatal(http.ListenAndServe(":8080", nil))
 }
