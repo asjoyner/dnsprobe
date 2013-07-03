@@ -15,6 +15,7 @@ import (
 )
 
 var MASTER_POLL_INTERVAL = 1 * time.Second
+var slaves []string
 
 type DnsServer struct {
   hostport, output_dir string
@@ -98,8 +99,7 @@ func (s *DnsServer) pollmaster() {
   }
 }
 
-// TODO: why can't I combine the declaration of the responses?
-func compare_responses(output_dir string, master_responses chan Response,
+func compare_responses(output_dir string, master_responses,
                        slave_responses chan Response) {
   files := make(map[string]*os.File)
   filemode := os.O_CREATE|os.O_APPEND|os.O_WRONLY
@@ -156,17 +156,63 @@ func compare_responses(output_dir string, master_responses chan Response,
 
 }
 
+
+func slavesHandler(w http.ResponseWriter, req *http.Request) {
+	//w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	fmt.Fprintf(w, "{\n\"slaves\": [")
+  for i := 0; i < len(slaves); i++ {
+    fmt.Fprintf(w, "\"%s\"", slaves[i])
+    if i != len(slaves)-1 {
+      fmt.Fprintf(w, ", ")
+    }
+  }
+  fmt.Fprintf(w, "]\n}")
+}
+
+
+func graphHandler(w http.ResponseWriter, req *http.Request) {
+  if err := req.ParseForm(); err != nil {
+    http.Error(w, "Invalid request", 500)
+    return
+  }
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+  fmt.Fprintf(w, "%s", req.Form["test"])
+  // TODO: return json usable by jQuery + chart api like this:
+  // https://developers.google.com/chart/interactive/docs/php_example
+  // <script src="//ajax.googleapis.com/ajax/libs/jquery/1.10.1/jquery.min.js"></script>
+  /*
+	fmt.Fprintf(w, "{\n\"slaves\": [")
+  for i := 0; i < len(slaves); i++ {
+    fmt.Fprintf(w, "\"%s\"", slaves[i])
+    if i != len(slaves)-1 {
+      fmt.Fprintf(w, ", ")
+    }
+  }
+  fmt.Fprintf(w, "]\n}")
+  */
+}
+
+
 func main() {
   dns_query := dns.Msg{}
   dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
   var output_dir = "data"
 
+  // Process the config, store the entries in a global []string
   config_filehandle, err := os.Open("dnsprobe.cfg")
   if err != nil {
     log.Fatal("error opening the config file: ", err)
   }
-
-  // TODO: Process the config before making the first query to the master?
+  bufScanner := bufio.NewScanner(config_filehandle)
+  for bufScanner.Scan() {
+    hostport := bufScanner.Text()
+    if ! strings.Contains(hostport, ":") {
+      log.Fatal("Config line does not contain a colon: ", hostport)
+    }
+    slaves = append(slaves, hostport)
+  }
+  config_filehandle.Close()
 
   // some channels for the master and slaves to coordinate later
   master_responses := make(chan Response, 3)
@@ -183,14 +229,9 @@ func main() {
   buffer := <-master_responses
   master_responses <-buffer
 
-  // read in the config, fire up one goroutine per slave to be polled
-  bufScanner := bufio.NewScanner(config_filehandle)
-  for bufScanner.Scan() {
-    hostport := bufScanner.Text()
-    if ! strings.Contains(hostport, ":") {
-      log.Fatal("Config line does not contain a colon: ", hostport)
-    }
-    dns_server := DnsServer{hostport: hostport,
+  // fire up one goroutine per slave to be polled
+  for i := 0; i < len(slaves); i++ {
+    dns_server := DnsServer{hostport: slaves[i],
                             responses: slave_responses,
                             dns_query: &dns_query}
     go dns_server.pollslave()
@@ -202,7 +243,7 @@ func main() {
 
   // launch the http server
   // TODO: build minimal web output that displays graphs
-  // use Flot?  http://www.flotcharts.org/flot/examples/basic-usage/index.html
-  //http.Handle("/graph", graphHandler)
+  http.HandleFunc("/slaves", slavesHandler)
+  http.HandleFunc("/graph", graphHandler)
   log.Fatal(http.ListenAndServe(":8080", nil))
 }
