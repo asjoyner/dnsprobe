@@ -106,6 +106,8 @@ func compare_responses(output_dir string, master_responses,
   var master_value, master_queried_at int64
   var last_master_poll = expvar.NewInt("last-successful-master-poll")
   var master_skew = int64(MASTER_POLL_INTERVAL)/1000000000 * 5
+  
+  // TODO: populate the files map outside the select, cleaner
 
   for {
     select {
@@ -161,8 +163,8 @@ func slavesHandler(w http.ResponseWriter, req *http.Request) {
 	//w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	fmt.Fprintf(w, "{\n\"slaves\": [")
-  for i := 0; i < len(slaves); i++ {
-    fmt.Fprintf(w, "\"%s\"", slaves[i])
+  for i, hostport := range slaves {
+    fmt.Fprintf(w, "\"%s\"", hostport)
     if i != len(slaves)-1 {
       fmt.Fprintf(w, ", ")
     }
@@ -183,8 +185,8 @@ func graphHandler(w http.ResponseWriter, req *http.Request) {
   // <script src="//ajax.googleapis.com/ajax/libs/jquery/1.10.1/jquery.min.js"></script>
   /*
 	fmt.Fprintf(w, "{\n\"slaves\": [")
-  for i := 0; i < len(slaves); i++ {
-    fmt.Fprintf(w, "\"%s\"", slaves[i])
+  for i, hostport := range slaves {
+    fmt.Fprintf(w, "\"%s\"", hostport)
     if i != len(slaves)-1 {
       fmt.Fprintf(w, ", ")
     }
@@ -230,8 +232,8 @@ func main() {
   master_responses <-buffer
 
   // fire up one goroutine per slave to be polled
-  for i := 0; i < len(slaves); i++ {
-    dns_server := DnsServer{hostport: slaves[i],
+  for _, hostport := range slaves {
+    dns_server := DnsServer{hostport: hostport,
                             responses: slave_responses,
                             dns_query: &dns_query}
     go dns_server.pollslave()
