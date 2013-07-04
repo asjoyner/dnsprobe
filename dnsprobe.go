@@ -14,7 +14,7 @@ import (
   "github.com/tonnerre/godns"
 )
 
-var MASTER_POLL_INTERVAL = 1 * time.Second
+var MASTER_POLL_INTERVAL = 5 * time.Second
 var slaves []string
 
 type DnsServer struct {
@@ -66,9 +66,9 @@ func (s *DnsServer) query() float64 {
 // loop forever polling the slave
 func (s *DnsServer) pollslave() {
   dns_client := &dns.Client{}
-  dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
+  dns_client.ReadTimeout = 10 * time.Second  // TODO: 30 seconds
   s.dns_client = *dns_client
-  ticker := time.NewTicker(5 * time.Second) // TODO: 300 seconds
+  ticker := time.NewTicker(30 * time.Second) // TODO: 300 seconds
   for {
     s.query()
     <-ticker.C
@@ -82,7 +82,7 @@ func (s *DnsServer) pollmaster() {
   var queries_sent int64
   var queries_avg, cumulative_latency float64
   dns_client := &dns.Client{}
-  dns_client.ReadTimeout = 3 * time.Second  // TODO: 30 seconds
+  dns_client.ReadTimeout = 10 * time.Second  // TODO: 30 seconds
   s.dns_client = *dns_client
   ticker := time.NewTicker(MASTER_POLL_INTERVAL) // TODO: 300 seconds
   for {
@@ -162,14 +162,14 @@ func compare_responses(output_dir string, master_responses,
 func slavesHandler(w http.ResponseWriter, req *http.Request) {
 	//w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	fmt.Fprintf(w, "{\n\"slaves\": [")
+	fmt.Fprintf(w, "[")
   for i, hostport := range slaves {
     fmt.Fprintf(w, "\"%s\"", hostport)
     if i != len(slaves)-1 {
       fmt.Fprintf(w, ", ")
     }
   }
-  fmt.Fprintf(w, "]\n}")
+  fmt.Fprintf(w, "]\n")
 }
 
 
