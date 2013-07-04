@@ -10,6 +10,7 @@ import (
   "path"
   "strconv"
   "strings"
+  "text/template"
   "time"
   "github.com/tonnerre/godns"
 )
@@ -149,7 +150,7 @@ func compare_responses(output_dir string, master_responses,
         latency = fmt.Sprintf("%d", master_value - r.txtrecord)
       }
       text := fmt.Sprintf("%d %.3f %s\n", r.queried_at, r.query_ms, latency)
-      log.Printf("%-25s %s", r.hostport, text)
+      //log.Printf("%-25s %s", r.hostport, text)
       if _, err := files[r.hostport].WriteString(text); err != nil {
         log.Printf("Could not write to %s log: %s", r.hostport, err)
       }
@@ -193,6 +194,15 @@ func graphHandler(w http.ResponseWriter, req *http.Request) {
   }
   fmt.Fprintf(w, "]\n}")
   */
+}
+
+
+func rootHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+  root, err := template.New("index.html").ParseFiles("html/index.html")
+  if err != nil { panic(err) }
+  err = root.Execute(w, slaves)
+  if err != nil { panic(err) }
 }
 
 
@@ -245,7 +255,9 @@ func main() {
 
   // launch the http server
   // TODO: build minimal web output that displays graphs
+  http.HandleFunc("/", rootHandler)
   http.HandleFunc("/slaves", slavesHandler)
   http.HandleFunc("/graph", graphHandler)
+	http.Handle("/html/", http.StripPrefix("/html/", http.FileServer(http.Dir("html"))))
   log.Fatal(http.ListenAndServe(":8080", nil))
 }
