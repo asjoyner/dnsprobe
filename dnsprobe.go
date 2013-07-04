@@ -23,7 +23,7 @@ type DnsServer struct {
   file *os.File
   dns_client dns.Client
   dns_query *dns.Msg
-  responses chan Response
+  responses chan *Response
 }
 
 type Response struct {
@@ -46,7 +46,7 @@ func (s *DnsServer) query() float64 {
   // We received an empty respose
   if resp == nil || len(resp.Answer) == 0 {
     log.Printf("empty response from %s", s.hostport)
-    s.responses <- Response{s.hostport, 0, t.Unix(), query_ms}
+    s.responses <- &Response{s.hostport, 0, t.Unix(), query_ms}
     return 0
   }
 
@@ -55,11 +55,11 @@ func (s *DnsServer) query() float64 {
   txtrecord, err := strconv.ParseInt(slave_response, 10, 0)
   if err != nil {
     log.Printf("Bad data from %s: %s", s.hostport, err)
-    s.responses <- Response{s.hostport, 0, t.Unix(), query_ms}
+    s.responses <- &Response{s.hostport, 0, t.Unix(), query_ms}
     return query_ms
   }
 
-  s.responses <- Response{s.hostport, txtrecord, t.Unix(), query_ms}
+  s.responses <- &Response{s.hostport, txtrecord, t.Unix(), query_ms}
   return query_ms
 }
 
@@ -101,7 +101,7 @@ func (s *DnsServer) pollmaster() {
 }
 
 func compare_responses(output_dir string, master_responses,
-                       slave_responses chan Response) {
+                       slave_responses chan *Response) {
   files := make(map[string]*os.File)
   filemode := os.O_CREATE|os.O_APPEND|os.O_WRONLY
   var master_value, master_queried_at int64
@@ -227,8 +227,8 @@ func main() {
   config_filehandle.Close()
 
   // some channels for the master and slaves to coordinate later
-  master_responses := make(chan Response, 3)
-  slave_responses := make(chan Response, 100)
+  master_responses := make(chan *Response, 3)
+  slave_responses := make(chan *Response, 100)
 
   // Poll the master to keep track of it's state
   // TODO: Accept the master address via a flag or config, with a default
