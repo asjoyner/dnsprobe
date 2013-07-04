@@ -17,9 +17,10 @@ import (
 
 var MASTER_POLL_INTERVAL = 5 * time.Second
 var slaves []string
+var output_dir = "data"
 
 type DnsServer struct {
-  hostport, output_dir string
+  hostport string
   file *os.File
   dns_client dns.Client
   dns_query *dns.Msg
@@ -88,8 +89,8 @@ func (s *DnsServer) pollmaster() {
   ticker := time.NewTicker(MASTER_POLL_INTERVAL)
   for {
     // Send the query to the master
-    query_ms := s.query()
     <-ticker.C
+    query_ms := s.query()
 
     // Notify the main thread that we've made a successful first poll
     queries_sent++
@@ -100,8 +101,7 @@ func (s *DnsServer) pollmaster() {
   }
 }
 
-func compare_responses(output_dir string, master_responses,
-                       slave_responses chan *Response) {
+func compare_responses(master_responses, slave_responses chan *Response) {
   files := make(map[string]*os.File)
   filemode := os.O_CREATE|os.O_APPEND|os.O_WRONLY
   var master_value, master_queried_at int64
@@ -124,7 +124,7 @@ func compare_responses(output_dir string, master_responses,
         filename := path.Join(output_dir, fmt.Sprintf("%v.data", r.hostport))
         f, err := os.OpenFile(filename, filemode, 0600)
         if err != nil {
-          log.Fatal("Could not write to the output file:", err)
+          log.Println("Could not write to the output file:", err)
         }
         defer f.Close()
         files[r.hostport] = f  // store it for later use
@@ -158,6 +158,19 @@ func compare_responses(output_dir string, master_responses,
 }
 
 
+func getJsonForSlave(slave string) (string, error) {
+  filename := path.Join(output_dir, fmt.Sprintf("%v.data", slave))
+  f, err := os.Open(filename)
+  if err != nil {
+    log.Println("Could not read from slave file for http request:", err)
+    return "", err
+  }
+  defer f.Close()
+  // TODO: read the file, convert to JSON, return as string
+  return "", err
+}
+
+
 func slavesHandler(w http.ResponseWriter, req *http.Request) {
 	//w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -174,11 +187,19 @@ func slavesHandler(w http.ResponseWriter, req *http.Request) {
 
 func graphHandler(w http.ResponseWriter, req *http.Request) {
   if err := req.ParseForm(); err != nil {
-    http.Error(w, "Invalid request", 500)
+    http.Error(w, "I could not parse your form variables.", 500)
+    return
+  }
+  if _, err := req.Form["slave"]; ! err {
+    http.Error(w, "Please specify a slave.", 501)
     return
   }
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-  fmt.Fprintf(w, "%s", req.Form["test"])
+  for _, slave := range slaves {
+    if slave == req.Form.Get("slave") {
+    }
+  }
+  fmt.Fprintf(w, "Coming soon!")
   // TODO: return json usable by jQuery + chart api like this:
   // https://developers.google.com/chart/interactive/docs/php_example
   // <script src="//ajax.googleapis.com/ajax/libs/jquery/1.10.1/jquery.min.js"></script>
@@ -207,7 +228,6 @@ func rootHandler(w http.ResponseWriter, req *http.Request) {
 func main() {
   dns_query := dns.Msg{}
   dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
-  var output_dir = "data"
 
   // Process the config, store the entries in a global []string
   config_filehandle, err := os.Open("dnsprobe.cfg")
@@ -249,7 +269,7 @@ func main() {
   }
 
   // Collate the responses and record them on disk
-  go compare_responses(output_dir, master_responses, slave_responses)
+  go compare_responses(master_responses, slave_responses)
 
   // launch the http server
   // TODO: build minimal web output that displays graphs
@@ -257,5 +277,6 @@ func main() {
   http.HandleFunc("/slaves", slavesHandler)
   http.HandleFunc("/graph", graphHandler)
 	http.Handle("/html/", http.StripPrefix("/html/", http.FileServer(http.Dir("html"))))
-  log.Fatal(http.ListenAndServe(":8080", nil))
+  // TODO: Drop the 127.0.0.1 restriction
+  log.Fatal(http.ListenAndServe("127.0.0.1:8080", nil))
 }
