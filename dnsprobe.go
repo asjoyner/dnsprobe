@@ -67,9 +67,9 @@ func (s *DnsServer) query() float64 {
 // loop forever polling the slave
 func (s *DnsServer) pollslave() {
   dns_client := &dns.Client{}
-  dns_client.ReadTimeout = 10 * time.Second  // TODO: 30 seconds
+  dns_client.ReadTimeout = 10 * time.Second
   s.dns_client = *dns_client
-  ticker := time.NewTicker(30 * time.Second) // TODO: 300 seconds
+  ticker := time.NewTicker(30 * time.Second)
   for {
     s.query()
     <-ticker.C
@@ -83,13 +83,13 @@ func (s *DnsServer) pollmaster() {
   var queries_sent int64
   var queries_avg, cumulative_latency float64
   dns_client := &dns.Client{}
-  dns_client.ReadTimeout = 10 * time.Second  // TODO: 30 seconds
+  dns_client.ReadTimeout = 10 * time.Second
   s.dns_client = *dns_client
-  ticker := time.NewTicker(MASTER_POLL_INTERVAL) // TODO: 300 seconds
+  ticker := time.NewTicker(MASTER_POLL_INTERVAL)
   for {
-    <-ticker.C  // Don't send a flood of queries in a restart loop...
     // Send the query to the master
     query_ms := s.query()
+    <-ticker.C
 
     // Notify the main thread that we've made a successful first poll
     queries_sent++
@@ -107,8 +107,6 @@ func compare_responses(output_dir string, master_responses,
   var master_value, master_queried_at int64
   var last_master_poll = expvar.NewInt("last-successful-master-poll")
   var master_skew = int64(MASTER_POLL_INTERVAL)/1000000000 * 5
-  
-  // TODO: populate the files map outside the select, cleaner
 
   for {
     select {
