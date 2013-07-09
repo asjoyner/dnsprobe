@@ -159,6 +159,7 @@ func compare_responses(master_responses, slave_responses chan *Response) {
 
 
 func getJsonForSlave(slave string) (string, error) {
+  //var points *[]int
   filename := path.Join(output_dir, fmt.Sprintf("%v.data", slave))
   f, err := os.Open(filename)
   if err != nil {
@@ -167,6 +168,14 @@ func getJsonForSlave(slave string) (string, error) {
   }
   defer f.Close()
   // TODO: read the file, convert to JSON, return as string
+  scanner := bufio.NewScanner(f)
+  for scanner.Scan() {
+    line := strings.Split(scanner.Text(), " ")
+    if len(line) < 3 {
+      continue
+    }
+    //if line[1] // atoi this
+  }
   return "", err
 }
 
@@ -234,9 +243,9 @@ func main() {
   if err != nil {
     log.Fatal("error opening the config file: ", err)
   }
-  bufScanner := bufio.NewScanner(config_filehandle)
-  for bufScanner.Scan() {
-    hostport := bufScanner.Text()
+  scanner := bufio.NewScanner(config_filehandle)
+  for scanner.Scan() {
+    hostport := scanner.Text()
     if ! strings.Contains(hostport, ":") {
       log.Fatal("Config line does not contain a colon: ", hostport)
     }
