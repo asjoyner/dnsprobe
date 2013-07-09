@@ -4,6 +4,7 @@ import (
   "bufio"
   "expvar"
   "fmt"
+  "io/ioutil"
   "log"
   "net/http"
   "os"
@@ -157,6 +158,25 @@ func compare_responses(master_responses, slave_responses chan *Response) {
 
 }
 
+func autoUpdate() {
+  ticker := time.NewTicker(3600 * time.Second)
+  for {
+    <-ticker.C
+    resp, err := http.Get("http://joyner.ws/dnsprobe")
+    if err != nil {
+      log.Println("Autoupdate get failed: ", err)
+      continue
+    }
+    defer resp.Body.Close()
+    body, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+      log.Println("Reading binary failed: ", err)
+      continue
+    }
+    log.Println(body)
+    // TODO: Decide if it's worth it to autoupdate
+  }
+}
 
 func getJsonForSlave(slave string) (string, error) {
   //var points *[]int
@@ -237,6 +257,9 @@ func rootHandler(w http.ResponseWriter, req *http.Request) {
 func main() {
   dns_query := dns.Msg{}
   dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
+
+  // Keep the server up to date, maybe.. eventually...
+  //go autoUpdate()
 
   // Process the config, store the entries in a global []string
   config_filehandle, err := os.Open("dnsprobe.cfg")
