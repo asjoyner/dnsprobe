@@ -274,10 +274,10 @@ func main() {
   }
   output_dir = path.Join("dnsprobe-data", hostname)
   log.Printf("Will write log data to: %s/\n", output_dir)
+  os.MkdirAll(output_dir, 0775)
   if _, err := os.Stat(output_dir); err != nil {
       if os.IsNotExist(err) {
-        log.Fatal("The log data directory does not exist.")
-        // TODO: create it?
+        log.Fatal("The log data directory could not be created.")
       } else {
         log.Fatal("Could not check on the state of the log dir?: %s", err)
       }
