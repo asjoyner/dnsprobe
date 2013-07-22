@@ -18,7 +18,7 @@ import (
 
 var MASTER_POLL_INTERVAL = 5 * time.Second
 var slaves []string
-var output_dir = "data"
+var output_dir string
 
 type DnsServer struct {
   hostport string
@@ -178,6 +178,15 @@ func autoUpdate() {
   }
 }
 
+
+func backupResults () {
+  ticker := time.NewTicker(3600 * time.Second)
+  for {
+    <-ticker.C
+  }
+}
+
+
 func getJsonForSlave(slave string) (string, error) {
   //var points *[]int
   filename := path.Join(output_dir, fmt.Sprintf("%v.data", slave))
@@ -258,6 +267,21 @@ func main() {
   dns_query := dns.Msg{}
   dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
 
+  // Setup the initial environment
+  hostname, err := os.Hostname()
+  if err != nil {
+    log.Fatal("Can not determine the machine's hostname: %s", err)
+  }
+  output_dir = path.Join("dnsprobe-data", hostname)
+  log.Printf("Will write log data to: %s/\n", output_dir)
+  if _, err := os.Stat(output_dir); err != nil {
+      if os.IsNotExist(err) {
+        log.Fatal("The log data directory does not exist.")
+        // TODO: create it?
+      } else {
+        log.Fatal("Could not check on the state of the log dir?: %s" % err)
+      }
+  }
   // Keep the server up to date, maybe.. eventually...
   //go autoUpdate()
 
@@ -302,6 +326,9 @@ func main() {
 
   // Collate the responses and record them on disk
   go compare_responses(master_responses, slave_responses)
+
+  // Periodically copy the results up to github
+  go backupResults()
 
   // launch the http server
   // TODO: build minimal web output that displays graphs
