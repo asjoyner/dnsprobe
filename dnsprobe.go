@@ -279,7 +279,7 @@ func main() {
         log.Fatal("The log data directory does not exist.")
         // TODO: create it?
       } else {
-        log.Fatal("Could not check on the state of the log dir?: %s" % err)
+        log.Fatal("Could not check on the state of the log dir?: %s", err)
       }
   }
   // Keep the server up to date, maybe.. eventually...
