@@ -8,6 +8,7 @@ import (
   "log"
   "net/http"
   "os"
+  "os/exec"
   "path"
   "strconv"
   "strings"
@@ -18,7 +19,7 @@ import (
 
 var MASTER_POLL_INTERVAL = 5 * time.Second
 var slaves []string
-var output_dir string
+var hostname, output_dir string
 
 type DnsServer struct {
   hostport string
@@ -182,7 +183,26 @@ func autoUpdate() {
 func backupResults () {
   ticker := time.NewTicker(3600 * time.Second)
   for {
+    <-time.After(300 * time.Second)
+    comment := fmt.Sprintf("Automatic submission by %s", hostname)
+    git_commands := [][]string{
+      {"add", "."},
+      {"commit", "-am", comment},
+      {"push"},
+    }
+    for _, args := range git_commands {
+      cmd := exec.Command("git", args...)
+      cmd.Dir = output_dir
+      err := cmd.Run()
+      if err != nil {
+        log.Printf("Failed to call %s: %s", cmd, err)
+      }
+    }
     <-ticker.C
+
+    // TODO: configure the git client:
+    //$ git config --global user.email probe1@gce
+    //$ git config --global user.name "GCE Probe1"
   }
 }
 
@@ -268,10 +288,11 @@ func main() {
   dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
 
   // Setup the initial environment
-  hostname, err := os.Hostname()
+  resp, err := os.Hostname()
   if err != nil {
     log.Fatal("Can not determine the machine's hostname: %s", err)
   }
+  hostname = resp
   output_dir = path.Join("dnsprobe-data", hostname)
   log.Printf("Will write log data to: %s/\n", output_dir)
   os.MkdirAll(output_dir, 0775)

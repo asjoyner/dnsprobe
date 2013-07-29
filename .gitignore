@@ -1,3 +1,6 @@
+.*\.swp
 dnsprobe
 data
 data/.*
+dnsprobe-data
+dnsprobe-data/.*
