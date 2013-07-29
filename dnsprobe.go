@@ -200,9 +200,6 @@ func backupResults () {
     }
     <-ticker.C
 
-    // TODO: configure the git client:
-    //$ git config --global user.email probe1@gce
-    //$ git config --global user.name "GCE Probe1"
   }
 }
 
