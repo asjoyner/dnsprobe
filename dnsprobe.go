@@ -18,11 +18,14 @@ import (
   "github.com/tonnerre/godns"
 )
 
-var MASTER_POLL_INTERVAL = 5 * time.Second
 var slaves []string
 var hostname, output_dir string
 
 var uploadToGit = flag.Bool("u", false, "Upload the dns probe data to github.")
+var masterPollInterval = flag.Duration("m", 5 * time.Second, "How often to poll the master.  Please provide units.")
+var slavePollInterval = flag.Duration("s", 30 * time.Second, "How often to poll the master.  Please provide units.")
+var dnsPollTimeout = flag.Duration("t", 10 * time.Second, "How often to wait for a DNS response.")
+var bindAddr = flag.String("address", ":8080", "IP and port to bind HTTP server to.  Pass an empty string to disable the HTTP server.")
 
 type DnsServer struct {
   hostport string
@@ -73,9 +76,9 @@ func (s *DnsServer) query() float64 {
 // loop forever polling the slave
 func (s *DnsServer) pollslave() {
   dns_client := &dns.Client{}
-  dns_client.ReadTimeout = 10 * time.Second
+  dns_client.ReadTimeout = *dnsPollTimeout
   s.dns_client = *dns_client
-  ticker := time.NewTicker(30 * time.Second)
+  ticker := time.NewTicker(*slavePollInterval)
   for {
     s.query()
     <-ticker.C
@@ -89,9 +92,9 @@ func (s *DnsServer) pollmaster() {
   var queries_sent int64
   var queries_avg, cumulative_latency float64
   dns_client := &dns.Client{}
-  dns_client.ReadTimeout = 10 * time.Second
+  dns_client.ReadTimeout = *dnsPollTimeout
   s.dns_client = *dns_client
-  ticker := time.NewTicker(MASTER_POLL_INTERVAL)
+  ticker := time.NewTicker(*masterPollInterval)
   for {
     // Send the query to the master
     <-ticker.C
@@ -111,7 +114,7 @@ func compare_responses(master_responses, slave_responses chan *Response) {
   filemode := os.O_CREATE|os.O_APPEND|os.O_WRONLY
   var master_value, master_queried_at int64
   var last_master_poll = expvar.NewInt("last-successful-master-poll")
-  var master_skew = int64(MASTER_POLL_INTERVAL)/1000000000 * 5
+  var master_skew = int64(*masterPollInterval)/1000000000 * 5
 
   for {
     select {
@@ -288,6 +291,18 @@ func rootHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 
+func launchHttpServer() {
+  // TODO: build minimal web output that displays graphs
+  http.HandleFunc("/", rootHandler)
+  http.HandleFunc("/slaves", slavesHandler)
+  http.HandleFunc("/graph", graphHandler)
+	http.Handle("/html/", http.StripPrefix("/html/",
+              http.FileServer(http.Dir("html"))))
+  // TODO: Drop the 127.0.0.1 restriction
+  log.Fatal(http.ListenAndServe(*bindAddr, nil))
+}
+
+
 func main() {
   flag.Parse()
   dns_query := dns.Msg{}
@@ -327,6 +342,11 @@ func main() {
   }
   config_filehandle.Close()
 
+  // configure and launch the http server
+  if *bindAddr != "" {
+    go launchHttpServer()
+  }
+
   // some channels for the master and slaves to coordinate later
   master_responses := make(chan *Response, 3)
   slave_responses := make(chan *Response, 100)
@@ -357,12 +377,8 @@ func main() {
   // Periodically copy the results up to github
   go backupResults()
 
-  // launch the http server
-  // TODO: build minimal web output that displays graphs
-  http.HandleFunc("/", rootHandler)
-  http.HandleFunc("/slaves", slavesHandler)
-  http.HandleFunc("/graph", graphHandler)
-	http.Handle("/html/", http.StripPrefix("/html/", http.FileServer(http.Dir("html"))))
-  // TODO: Drop the 127.0.0.1 restriction
-  log.Fatal(http.ListenAndServe("127.0.0.1:8080", nil))
+  // Hang out for a little while
+  for {
+    <-time.After(8760 * time.Hour)
+  }
 }
