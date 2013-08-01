@@ -3,6 +3,7 @@ package main
 import (
   "bufio"
   "expvar"
+  "flag"
   "fmt"
   "io/ioutil"
   "log"
@@ -20,6 +21,8 @@ import (
 var MASTER_POLL_INTERVAL = 5 * time.Second
 var slaves []string
 var hostname, output_dir string
+
+var uploadToGit = flag.Bool("u", false, "Upload the dns probe data to github.")
 
 type DnsServer struct {
   hostport string
@@ -182,8 +185,13 @@ func autoUpdate() {
 
 func backupResults () {
   ticker := time.NewTicker(3600 * time.Second)
+  <-time.After(300 * time.Second)
+  if !*uploadToGit {
+        log.Println("Not backing up data to github.")
+        return
+  }
+  log.Println("Preparing to backup data to github.")
   for {
-    <-time.After(300 * time.Second)
     comment := fmt.Sprintf("Automatic submission by %s", hostname)
     git_commands := [][]string{
       {"add", "."},
@@ -281,6 +289,7 @@ func rootHandler(w http.ResponseWriter, req *http.Request) {
 
 
 func main() {
+  flag.Parse()
   dns_query := dns.Msg{}
   dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
 
