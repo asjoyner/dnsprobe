@@ -24,8 +24,8 @@ var hostname, output_dir string
 var uploadToGit = flag.Bool("u", false, "Upload the dns probe data to github.")
 var masterPollInterval = flag.Duration("m", 5 * time.Second, "How often to poll the master.  Please provide units.")
 var slavePollInterval = flag.Duration("s", 30 * time.Second, "How often to poll the master.  Please provide units.")
-var dnsPollTimeout = flag.Duration("t", 10 * time.Second, "How often to wait for a DNS response.")
-var bindAddr = flag.String("address", ":8080", "IP and port to bind HTTP server to.  Pass an empty string to disable the HTTP server.")
+var dnsPollTimeout = flag.Duration("t", 10 * time.Second, "How long to wait for a DNS response.")
+var bindAddr = flag.String("address", "127.0.0.1:8080", "IP and port to bind HTTP server to.  Pass an empty string to disable the HTTP server.")
 
 type DnsServer struct {
   hostport string
