@@ -22,6 +22,8 @@ var slaves []string
 var hostname, output_dir string
 
 var uploadToGit = flag.Bool("u", false, "Upload the dns probe data to github.")
+var initialUploadDelay = flag.Duration("gitdelay", 300 * time.Second, "How long to wait before the first upload to github.")
+var UploadDelay = flag.Duration("gitfreq", 3600 * time.Second, "How long to wait between subsequent uploads to github.")
 var masterPollInterval = flag.Duration("m", 5 * time.Second, "How often to poll the master.  Please provide units.")
 var slavePollInterval = flag.Duration("s", 30 * time.Second, "How often to poll the master.  Please provide units.")
 var dnsPollTimeout = flag.Duration("t", 10 * time.Second, "How often to wait for a DNS response.")
@@ -187,12 +189,12 @@ func autoUpdate() {
 
 
 func backupResults () {
-  ticker := time.NewTicker(3600 * time.Second)
-  <-time.After(300 * time.Second)
   if !*uploadToGit {
         log.Println("Not backing up data to github.")
         return
   }
+  ticker := time.NewTicker(UploadDelay)
+  <-time.After(initialUploadDelay)
   log.Println("Preparing to backup data to github.")
   for {
     comment := fmt.Sprintf("Automatic submission by %s", hostname)
