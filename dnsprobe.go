@@ -193,8 +193,8 @@ func backupResults () {
         log.Println("Not backing up data to github.")
         return
   }
-  ticker := time.NewTicker(UploadDelay)
-  <-time.After(initialUploadDelay)
+  ticker := time.NewTicker(*UploadDelay)
+  <-time.After(*initialUploadDelay)
   log.Println("Preparing to backup data to github.")
   for {
     comment := fmt.Sprintf("Automatic submission by %s", hostname)
