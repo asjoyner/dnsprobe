@@ -43,31 +43,30 @@ type Response struct {
   query_ms float64
 }
 
-// query once and write the output to the provided file handle
+// query once and pass the response down the responses channel
 func (s *DnsServer) query() float64 {
   t := time.Now()
+  var txtrecord int64 = 0
+  var query_ms float64
+  var err error // to match txtrecord, below
   resp, rtt, err := s.dns_client.Exchange(s.dns_query, s.hostport)
   if err != nil {
     log.Printf("Error reading from %s: %s (%s)", s.hostport, err, rtt)
-    // if we get a straight-up error (typically i/o timeout), skip it
-    return 0
-  }
-  query_ms := float64(rtt) / 1000000
-
-  // We received an empty respose
-  if resp == nil || len(resp.Answer) == 0 {
+    query_ms = float64(time.Since(t)) / 1000000
+    txtrecord = -1
+  } else if resp == nil || len(resp.Answer) == 0 {
+    // We received an empty respose
     log.Printf("empty response from %s", s.hostport)
-    s.responses <- &Response{s.hostport, 0, t.Unix(), query_ms}
-    return 0
-  }
-
-  // Parse the response into an int64
-  slave_response := resp.Answer[0].(*dns.TXT).Txt[0]
-  txtrecord, err := strconv.ParseInt(slave_response, 10, 0)
-  if err != nil {
-    log.Printf("Bad data from %s: %s", s.hostport, err)
-    s.responses <- &Response{s.hostport, 0, t.Unix(), query_ms}
-    return query_ms
+    query_ms = float64(time.Since(t)) / 1000000
+  } else {
+    // Parse the response into an int64
+    query_ms = float64(rtt) / 1000000
+    slave_response := resp.Answer[0].(*dns.TXT).Txt[0]
+    txtrecord, err = strconv.ParseInt(slave_response, 10, 0)
+    if err != nil {
+      log.Printf("Bad data from %s: %s", s.hostport, err)
+      txtrecord = -2
+    }
   }
 
   s.responses <- &Response{s.hostport, txtrecord, t.Unix(), query_ms}
@@ -76,6 +75,7 @@ func (s *DnsServer) query() float64 {
 
 
 // loop forever polling the slave
+// TODO: integrate slave and master versions, export varz for slaves
 func (s *DnsServer) pollslave() {
   dns_client := &dns.Client{}
   dns_client.ReadTimeout = *dnsPollTimeout
@@ -153,9 +153,16 @@ func compare_responses(master_responses, slave_responses chan *Response) {
       }
 
       // if available, compare the response with the master, and log it
-      latency := "nan"
-      if r.txtrecord != 0 {
+      var latency string
+      switch {
+      case r.txtrecord > 0:
         latency = fmt.Sprintf("%d", master_value - r.txtrecord)
+      case r.txtrecord == 0:
+        latency = "nan"
+      case r.txtrecord == -1:
+        latency = "timeout"
+      case r.txtrecord == -2:
+        latency = "bogus"
       }
       text := fmt.Sprintf("%d %.3f %s\n", r.queried_at, r.query_ms, latency)
       //log.Printf("%-25s %s", r.hostport, text)
@@ -300,7 +307,6 @@ func launchHttpServer() {
   http.HandleFunc("/graph", graphHandler)
 	http.Handle("/html/", http.StripPrefix("/html/",
               http.FileServer(http.Dir("html"))))
-  // TODO: Drop the 127.0.0.1 restriction
   log.Fatal(http.ListenAndServe(*bindAddr, nil))
 }
 
