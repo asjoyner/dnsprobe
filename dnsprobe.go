@@ -207,7 +207,10 @@ func backupResults () {
   }
   log.Println("Preparing to backup data to github.")
   ticker := time.NewTicker(*UploadDelay)
+  var err error
+  var output []byte
   for {
+    err = nil
     comment := fmt.Sprintf("Automatic submission by %s", hostname)
     git_commands := [][]string{
       {"add", "."},
@@ -218,10 +221,14 @@ func backupResults () {
     for _, args := range git_commands {
       cmd := exec.Command("git", args...)
       cmd.Dir = output_dir
-      err := cmd.Run()
+      output, err = cmd.Output()
       if err != nil {
-        log.Printf("Failed to call %s: %s", cmd, err)
+        log.Printf("Failed to call git %s: %s\n", args, output)
+        break
       }
+    }
+    if err == nil {
+      log.Printf("Completed successful backup to github.")
     }
     select {  // wait for http signal of gitNow or the timeout to expire
     case <-gitNow:
