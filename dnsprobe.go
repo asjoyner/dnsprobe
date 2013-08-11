@@ -20,6 +20,7 @@ import (
 
 var slaves []string
 var hostname, output_dir string
+var gitNow chan bool
 
 var uploadToGit = flag.Bool("u", false, "Upload the dns probe data to github.")
 var initialUploadDelay = flag.Duration("gitdelay", 300 * time.Second, "How long to wait before the first upload to github.")
@@ -200,9 +201,12 @@ func backupResults () {
         log.Println("Not backing up data to github.")
         return
   }
-  ticker := time.NewTicker(*UploadDelay)
-  <-time.After(*initialUploadDelay)
+  select {  // wait for http signal of gitNow or the timeout to expire
+  case <-gitNow:
+  case <-time.After(*initialUploadDelay):
+  }
   log.Println("Preparing to backup data to github.")
+  ticker := time.NewTicker(*UploadDelay)
   for {
     comment := fmt.Sprintf("Automatic submission by %s", hostname)
     git_commands := [][]string{
@@ -219,7 +223,10 @@ func backupResults () {
         log.Printf("Failed to call %s: %s", cmd, err)
       }
     }
-    <-ticker.C
+    select {  // wait for http signal of gitNow or the timeout to expire
+    case <-gitNow:
+    case <-ticker.C:
+    }
 
   }
 }
@@ -292,6 +299,14 @@ func graphHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 
+func gitNowHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, "Triggering an upload to git now...")
+  gitNow <- true
+  return
+}
+
+
 func rootHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
   root, err := template.New("index.html").ParseFiles("html/index.html")
@@ -304,6 +319,7 @@ func rootHandler(w http.ResponseWriter, req *http.Request) {
 func launchHttpServer() {
   // TODO: build minimal web output that displays graphs
   http.HandleFunc("/", rootHandler)
+  http.HandleFunc("/upload", gitNowHandler)
   http.HandleFunc("/slaves", slavesHandler)
   http.HandleFunc("/graph", graphHandler)
 	http.Handle("/html/", http.StripPrefix("/html/",
@@ -316,6 +332,7 @@ func main() {
   flag.Parse()
   dns_query := dns.Msg{}
   dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
+  gitNow = make(chan bool)
 
   // Setup the initial environment
   resp, err := os.Hostname()
