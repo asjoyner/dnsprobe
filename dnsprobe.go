@@ -208,6 +208,7 @@ func backupResults () {
     git_commands := [][]string{
       {"add", "."},
       {"commit", "-am", comment},
+      {"pull", "--rebase"},
       {"push"},
     }
     for _, args := range git_commands {
