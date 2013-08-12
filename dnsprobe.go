@@ -112,12 +112,25 @@ func (s *DnsServer) pollmaster() {
   }
 }
 
+
+func getSlaveFH(hostport string) *os.File {
+  filename := path.Join(output_dir, fmt.Sprintf("%v.data", hostport))
+  filemode := os.O_CREATE|os.O_APPEND|os.O_WRONLY
+  f, err := os.OpenFile(filename, filemode, 0600)
+  if err != nil {
+    log.Println("Could not write to the output file:", err)
+  }
+  return f
+}
+
+
 func compare_responses(master_responses, slave_responses chan *Response) {
   files := make(map[string]*os.File)
-  filemode := os.O_CREATE|os.O_APPEND|os.O_WRONLY
   var master_value, master_queried_at int64
   var last_master_poll = expvar.NewInt("last-successful-master-poll")
   var master_skew = int64(*masterPollInterval)/1000000000 * 5
+  ticker := time.NewTicker(*UploadDelay)
+  firstUpload := time.NewTimer(*initialUploadDelay)
 
   for {
     select {
@@ -132,13 +145,8 @@ func compare_responses(master_responses, slave_responses chan *Response) {
     case r := <-slave_responses:
       // Make sure we have a FH open for this slave
       if _, ok := files[r.hostport]; !ok {
-        filename := path.Join(output_dir, fmt.Sprintf("%v.data", r.hostport))
-        f, err := os.OpenFile(filename, filemode, 0600)
-        if err != nil {
-          log.Println("Could not write to the output file:", err)
-        }
-        defer f.Close()
-        files[r.hostport] = f  // store it for later use
+        // and store it for later use
+        files[r.hostport] = getSlaveFH(r.hostport)
       }
 
       // Drop polls from the slaves if the master data goes stale
@@ -170,6 +178,13 @@ func compare_responses(master_responses, slave_responses chan *Response) {
       if _, err := files[r.hostport].WriteString(text); err != nil {
         log.Printf("Could not write to %s log: %s", r.hostport, err)
       }
+
+    case <-gitNow:
+      backupResults(files)
+    case <-firstUpload.C:
+      backupResults(files)
+    case <-ticker.C:
+      backupResults(files)
     }
   }
 
@@ -196,45 +211,36 @@ func autoUpdate() {
 }
 
 
-func backupResults () {
+func backupResults(files map[string]*os.File) {
   if !*uploadToGit {
         log.Println("Not backing up data to github.")
         return
   }
-  select {  // wait for http signal of gitNow or the timeout to expire
-  case <-gitNow:
-  case <-time.After(*initialUploadDelay):
-  }
   log.Println("Preparing to backup data to github.")
-  ticker := time.NewTicker(*UploadDelay)
   var err error
   var output []byte
-  for {
-    err = nil
-    comment := fmt.Sprintf("Automatic submission by %s", hostname)
-    git_commands := [][]string{
-      {"add", "."},
-      {"commit", "-am", comment},
-      {"pull", "--rebase"},
-      {"push"},
+  comment := fmt.Sprintf("Automatic submission by %s", hostname)
+  git_commands := [][]string{
+    {"add", "."},
+    {"commit", "-am", comment},
+    {"pull", "--rebase"},
+    {"push"},
+  }
+  for _, args := range git_commands {
+    cmd := exec.Command("git", args...)
+    cmd.Dir = output_dir
+    output, err = cmd.Output()
+    if err != nil {
+      log.Printf("Failed to call git %s: %s\n", args, output)
+      break
     }
-    for _, args := range git_commands {
-      cmd := exec.Command("git", args...)
-      cmd.Dir = output_dir
-      output, err = cmd.Output()
-      if err != nil {
-        log.Printf("Failed to call git %s: %s\n", args, output)
-        break
-      }
-    }
-    if err == nil {
-      log.Printf("Completed successful backup to github.")
-    }
-    select {  // wait for http signal of gitNow or the timeout to expire
-    case <-gitNow:
-    case <-ticker.C:
-    }
-
+  }
+  if err == nil {
+    log.Printf("Completed successful backup to github.")
+  }
+  // Reopen the filehandles, as pull --rebase may have remade the files
+  for hostport, _ := range files {
+    files[hostport] = getSlaveFH(hostport)
   }
 }
 
@@ -408,7 +414,7 @@ func main() {
   go compare_responses(master_responses, slave_responses)
 
   // Periodically copy the results up to github
-  go backupResults()
+  //go backupResults()
 
   // Hang out for a little while
   for {
