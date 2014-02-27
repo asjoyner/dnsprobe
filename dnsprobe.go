@@ -15,7 +15,7 @@ import (
   "strings"
   "text/template"
   "time"
-  "github.com/tonnerre/godns"
+  "github.com/miekg/dns"
 )
 
 var slaves []string
