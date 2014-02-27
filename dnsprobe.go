@@ -30,6 +30,8 @@ var slavePollInterval = flag.Duration("s", 30 * time.Second, "How often to poll 
 var dnsPollTimeout = flag.Duration("t", 10 * time.Second, "How often to wait for a DNS response.")
 var bindAddr = flag.String("address", "127.0.0.1:8080", "IP and port to bind HTTP server to.  Pass an empty string to disable the HTTP server.")
 var serve_dir = flag.String("serve_dir", "", "Directory to serve slave data from, defaults to the calculated output dir for this probe.")
+var master_hostport = flag.String("master", "127.0.0.1:53", "Host:port pair of the master DNS server to query.")
+var query_string = flag.String("query", "speedy.gonzales.local.", "Hostname to query for, should return a TXT record with epoch time.")
 
 type DnsServer struct {
   hostport string
@@ -407,7 +409,7 @@ func launchHttpServer() {
 func main() {
   flag.Parse()
   dns_query := dns.Msg{}
-  dns_query.SetQuestion("speedy.gonzales.joyner.ws.", dns.TypeTXT)
+  dns_query.SetQuestion(*query_string, dns.TypeTXT)
   gitNow = make(chan bool)
 
   // Setup the initial environment
@@ -458,7 +460,7 @@ func main() {
 
   // Poll the master to keep track of it's state
   // TODO: Accept the master address via a flag or config, with a default
-  master := DnsServer{hostport: "68.115.138.202:53",
+  master := DnsServer{hostport: *master_hostport,
                       responses: master_responses,
                       dns_query: &dns_query}
 
