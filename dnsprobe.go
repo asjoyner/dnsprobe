@@ -29,6 +29,7 @@ var masterPollInterval = flag.Duration("m", 5 * time.Second, "How often to poll 
 var slavePollInterval = flag.Duration("s", 30 * time.Second, "How often to poll the master.  Please provide units.")
 var dnsPollTimeout = flag.Duration("t", 10 * time.Second, "How often to wait for a DNS response.")
 var bindAddr = flag.String("address", "127.0.0.1:8080", "IP and port to bind HTTP server to.  Pass an empty string to disable the HTTP server.")
+var serve_dir = flag.String("serve_dir", "", "Directory to serve slave data from, defaults to the calculated output dir for this probe.")
 
 type DnsServer struct {
   hostport string
@@ -43,6 +44,13 @@ type Response struct {
   txtrecord, queried_at int64
   query_ms float64
 }
+
+/*
+type TimeSeriesPoint struct {
+  timestamp, latency, skew string
+}
+*/
+
 
 // query once and pass the response down the responses channel
 func (s *DnsServer) query() float64 {
@@ -281,6 +289,36 @@ func slavesHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 
+// TODO: generalize to support arbitrary probe host in path
+// FH is much better idea than *[]TimeSeriesPoint 
+func getSlaveData(hostport string) *os.File {
+  filename := path.Join(*serve_dir, fmt.Sprintf("%v.data", hostport))
+  filemode := os.O_RDONLY
+  f, err := os.OpenFile(filename, filemode, 0600)
+  if err != nil {
+    log.Println("Could not read from the slave file:", err)
+    return nil
+  }
+  return f
+  /*
+  slaveData := make([]TimeSeriesPoint, 100000)
+  scanner := bufio.NewScanner(f)
+  for scanner.Scan() {
+    line := scanner.Text()
+    if strings.Count(line, " ") != 2 {
+      log.Println("Slave data line is malformed: ", line)
+      continue
+    }
+    splitLine := strings.SplitN(line, " ", 3)
+    point := TimeSeriesPoint{timestamp: splitLine[0],
+                             latency: splitLine[1],
+                             skew: splitLine[2]}
+    slaveData = append(slaveData, point)
+  }
+  return *slaveData
+  */
+}
+
 func graphHandler(w http.ResponseWriter, req *http.Request) {
   if err := req.ParseForm(); err != nil {
     http.Error(w, "I could not parse your form variables.", 500)
@@ -291,24 +329,49 @@ func graphHandler(w http.ResponseWriter, req *http.Request) {
     return
   }
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-  for _, slave := range slaves {
+  for _, slave := range slaves {  // TODO: Do we need this?  Error out better...
     if slave == req.Form.Get("slave") {
+      // TODO: return json usable by jQuery + chart api like this:
+      // https://developers.google.com/chart/interactive/docs/php_example
+      f := getSlaveData(slave)
+      if f == nil {
+        http.Error(w, "Could not open the file.", 502)
+        return
+      }
+      fmt.Fprintf(w, `{"cols": [{"id": "timestamp", "label":"ts", "type":"datetime"},
+        {"id": "slave", "label":"%s", "type": "number"}],
+        "rows": [
+`, slave)
+      scanner := bufio.NewScanner(f)
+      for scanner.Scan() {
+        line := scanner.Text()
+        if strings.Count(line, " ") != 2 {
+          log.Println("Slave data line is malformed: ", line)
+          continue
+        }
+        splitLine := strings.SplitN(line, " ", 3)
+        if splitLine[2] == "timeout" {
+          splitLine[1] = ""
+        }
+        timestampGJ := timestampAsGJson(splitLine[0])
+        fmt.Fprintf(w, `  {"c":[{"v": "%s"}, {"v": "%s"}]},%s`, timestampGJ, splitLine[1], "\n")
+      }
+      fmt.Fprintf(w, "],\n}")
     }
   }
-  fmt.Fprintf(w, "Coming soon!")
-  // TODO: return json usable by jQuery + chart api like this:
-  // https://developers.google.com/chart/interactive/docs/php_example
-  // <script src="//ajax.googleapis.com/ajax/libs/jquery/1.10.1/jquery.min.js"></script>
-  /*
-	fmt.Fprintf(w, "{\n\"slaves\": [")
-  for i, hostport := range slaves {
-    fmt.Fprintf(w, "\"%s\"", hostport)
-    if i != len(slaves)-1 {
-      fmt.Fprintf(w, ", ")
-    }
+}
+
+
+func timestampAsGJson(timestamp string) string {
+  timestampInt, err := strconv.ParseInt(timestamp, 10, 0)
+  if err != nil {
+    log.Println("Slave data timestamp (%s) is malformed: ", timestamp, err)
+    return ""
   }
-  fmt.Fprintf(w, "]\n}")
-  */
+  t := time.Unix(timestampInt, 0)
+  gJson := fmt.Sprintf("Date(%d, %d, %d, %d, %d, %d)", t.Year(), t.Month(),
+                       t.Day(), t.Hour(), t.Minute(), t.Second())
+  return gJson
 }
 
 
@@ -354,6 +417,9 @@ func main() {
   }
   hostname = resp
   output_dir = path.Join("dnsprobe-data", hostname)
+  if *serve_dir == "" {
+    *serve_dir = output_dir
+  }
   log.Printf("Will write log data to: %s/\n", output_dir)
   os.MkdirAll(output_dir, 0775)
   if _, err := os.Stat(output_dir); err != nil {

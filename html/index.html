@@ -6,29 +6,92 @@
       }
     </style>
     <script type="text/javascript" src="https://www.google.com/jsapi"></script>
-    <script type="text/javascript" src="jquery-1.6.2.min.js"></script>
+    <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
     <script type="text/javascript">
-    
-    // Load the Visualization API and the piechart package.
-    google.load('visualization', '1', {'packages':['corechart']});
-      
-    // Set a callback to run when the Google Visualization API is loaded.
-    google.setOnLoadCallback(drawChart);
-      
-    function drawChart() {
-      var jsonData = $.ajax({
-          url: "/slaves",
-          dataType:"json",
-          async: false
-          }).responseText;
-          
-      // Create our data table out of JSON data loaded from server.
-      var data = new google.visualization.DataTable(jsonData);
+      /* Set implementation, courtesy
+        http://stackoverflow.com/questions/7958292/mimicking-sets-in-javascript
+      */
+      function set(initialData) {
+          // can pass initial data for the set in an object
+          this.data = initialData || {};
+      }
 
-      // Instantiate and draw our chart, passing in some options.
-      var chart = new google.visualization.PieChart(document.getElementById('chart_div'));
-      chart.draw(data, {width: 400, height: 240});
-    }
+      set.prototype = {
+          add: function(key, val) {
+              if (typeof key === "object") {
+                  for (var index in key) {
+                      if (key.hasOwnProperty(index)) {
+                          this.add(index, key[index]);
+                      }
+                  }
+              } else {
+                  this.data[key] = val;
+              }
+          },
+          get: function(key) {
+              return this.data[key];
+          },
+          remove: function(key) {
+              // can be one or more args
+              // each arg can be a string key or an array of string keys
+              var item;
+              for (var j = 0; j < arguments.length; j++) {
+                  item = arguments[j];
+                  if (typeof key === "string") {
+                      delete this.data[item];
+                  } else if (item.length) {
+                      // must be an array of keys
+                      for (var i = 0; i < item.length; i++) {
+                          delete this.data[item[i]];
+                      }
+                  }
+              }
+          },
+          has: function(key) {
+              return Object.prototype.hasOwnProperty.call(this.data, key);
+          },
+          isEmpty: function() {
+              for (var key in this.data) {
+                  if (this.has(key)) {
+                      return false;
+                  }
+              }
+              return true;
+          },
+          keys: function() {
+              return Object.keys(this.data);
+          },
+          clear: function() {
+              this.data = {}; 
+          }
+      };
+    </script>
+    <script type="text/javascript">
+      // Load the Visualization API and the piechart package.
+      google.load('visualization', '1', {'packages':['corechart']});
+        
+      // Set a callback to run when the Google Visualization API is loaded.
+      google.setOnLoadCallback(drawChart);
+
+      var slavesToDraw = new set();
+
+      var slave = "8.8.8.8:53";
+      var duration = "1d";
+
+      function drawChart() {
+        var jsonData = $.ajax({
+            url: "/graph?slave=" + slave + "&duration=" + duration,
+            dataType:"json",
+            async: false
+            }).responseText;
+            
+        // Create our data table out of JSON data loaded from server.
+        var data = new google.visualization.DataTable(jsonData);
+
+        // Instantiate and draw our chart, passing in some options.
+        var chart = new google.visualization.LineChart(document.getElementById('chart_div'));
+        chart.draw(data, {width: $(window).width() - 30, height: $(window).height() - 50});
+      }
 
     </script>
   </head>
@@ -36,7 +99,7 @@
   <body>
     <!--Div that will hold the list of URLs to load graphs for each slave-->
     <div id="slave_list">{{range .}}
-      <a href="#" class="slaveurl">{{.}}</a>{{end}}
+      <a href="#" class="slaveurl" onClick='slave="{{.}}"; drawChart();'>{{.}}</a>{{end}}
     </div>
     <!--Div that will hold the pie chart-->
     <div id="chart_div"></div>
